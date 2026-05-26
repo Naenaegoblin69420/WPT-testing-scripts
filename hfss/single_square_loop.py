@@ -4,11 +4,32 @@
 # corners (3-point arcs at each turn) and a configurable open gap on the
 # right side so the loop is not electrically closed.
 #
+# This script builds GEOMETRY ONLY -- it does NOT create a port or a port
+# sheet. Add your lumped port manually across the 1 mm gap after the
+# script finishes (or set ADD_SOLUTION = True only AFTER you have added a
+# port; otherwise the adaptive solve has nothing to drive and will error).
+#
 # Usage:
 #   1. Open / create an HFSS DrivenModal design.
 #   2. Automation -> Run Script -> select this file.
 #
 # All knobs are at the top of the file: edit, save, re-run.
+#
+# Sizing for 120 nH @ 400 MHz
+# ---------------------------
+# A single-turn square loop's inductance follows roughly (Greenhouse 1974,
+# rectangular cross-section w x t, mean side length a = LOOP_SIDE - w):
+#     L ~ (2 * mu0 * a / pi) * [ ln( 2 * a / (w + t) ) - 0.274 ]
+# With w = 0.5 mm, t = 0.035 mm, this gives ~120 nH at a ~= 33.5 mm
+# (LOOP_SIDE ~= 34 mm). Wheeler's modified-spiral formula (tuned for n >=
+# ~2 turns, less accurate for n = 1) would instead suggest LOOP_SIDE ~=
+# 43 mm. Real HFSS lands somewhere between these, usually closer to
+# Greenhouse for single rectangular loops.
+#
+# The default below is LOOP_SIDE_MM = 35.0, expected to land in the
+# 115 - 130 nH window in HFSS. After you build, add a port, solve, and
+# read L = Im(Z11) / (2*pi*Freq) at 400 MHz, scale LOOP_SIDE_MM by
+# roughly +/- 1 mm per +/- 4 nH and re-run until you hit 120 nH.
 
 import ScriptEnv
 import math
@@ -17,33 +38,30 @@ ScriptEnv.Initialize("Ansoft.ElectronicsDesktop")
 oDesktop.RestoreWindow()
 
 oProject = oDesktop.GetActiveProject()
-oDesign = oProject.GetActiveDesign()
-oEditor = oDesign.SetActiveEditor("3D Modeler")
+oDesign  = oProject.GetActiveDesign()
+oEditor  = oDesign.SetActiveEditor("3D Modeler")
 
 
 # ============================================================
 # Tunable parameters (mm everywhere)
 # ============================================================
 
-LOOP_SIDE_MM     = 20.0    # outer side length of the square
+LOOP_SIDE_MM     = 35.0    # outer side length; ~120 nH target at 400 MHz
 TRACE_WIDTH_MM   = 0.5     # trace width (perpendicular to path)
 TRACE_THICK_MM   = 0.035   # copper thickness (35 um = 1 oz Cu)
-CORNER_RADIUS_MM = 2.0     # inside fillet radius (must be > W/2)
+CORNER_RADIUS_MM = 3.0     # inside fillet radius (must be > W/2)
 GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 0.0     # z plane the loop sits in
 
-ADD_PORT       = True      # lumped port across the gap
 ADD_AIR_REGION = True      # air region + radiation boundary
-ADD_SOLUTION   = True      # 400 MHz adaptive + 50-800 MHz sweep
-
-PORT_IMPEDANCE = 50.0      # ohm
+ADD_SOLUTION   = False     # 400 MHz adaptive + 50-800 MHz sweep
+                           # leave False until you have manually added a
+                           # port; otherwise the solve has no excitation
 FREQ_MHZ       = 400.0     # design + radiation-boundary frequency
 PAD_MM         = 30        # air-region padding around the loop, each face
 
-MATERIAL   = "copper"
-LOOP_NAME  = "SquareLoop"
-PORT_NAME  = "LoopPort"
-SHEET_NAME = "LoopPort_Sheet"
+MATERIAL  = "copper"
+LOOP_NAME = "SquareLoop"
 
 
 # ============================================================
@@ -150,63 +168,6 @@ oEditor.CreatePolyline(polyline_params, attributes)
 
 
 # ============================================================
-# Optional: lumped port across the gap
-# ============================================================
-
-if ADD_PORT:
-    x0 = a - TRACE_WIDTH_MM / 2.0
-    oEditor.CreateRectangle(
-        [
-            "NAME:RectangleParameters",
-            "IsCovered:=", True,
-            "XStart:=",    "%fmm" % x0,
-            "YStart:=",    "%fmm" % -half_gap,
-            "ZStart:=",    "%fmm" % z,
-            "Width:=",     "%fmm" % TRACE_WIDTH_MM,
-            "Height:=",    "%fmm" % GAP_MM,
-            "WhichAxis:=", "Z",
-        ],
-        [
-            "NAME:Attributes",
-            "Name:=",                 SHEET_NAME,
-            "Flags:=",                "",
-            "Color:=",                "(255 0 0)",
-            "Transparency:=",         0.5,
-            "PartCoordinateSystem:=", "Global",
-            "MaterialValue:=",        '"vacuum"',
-            "SolveInside:=",          True,
-        ],
-    )
-
-    oBoundary = oDesign.GetModule("BoundarySetup")
-    oBoundary.AssignLumpedPort([
-        "NAME:" + PORT_NAME,
-        "Objects:=",                 [SHEET_NAME],
-        "RenormalizeAllTerminals:=", True,
-        "DoDeembed:=",               False,
-        [
-            "NAME:Modes",
-            [
-                "NAME:Mode1",
-                "ModeNum:=",      1,
-                "UseIntLine:=",   True,
-                [
-                    "NAME:IntLine",
-                    "Start:=", ["%fmm" % a, "%fmm" % -half_gap, "%fmm" % z],
-                    "End:=",   ["%fmm" % a, "%fmm" %  half_gap, "%fmm" % z],
-                ],
-                "CharImp:=",        "Zpi",
-                "AlignmentGroup:=", 0,
-                "RenormImp:=",      "%fohm" % PORT_IMPEDANCE,
-            ],
-        ],
-        "ShowReporterFilter:=", False,
-        "ReporterFilter:=",     [True],
-        "Impedance:=",          "%fohm" % PORT_IMPEDANCE,
-    ])
-
-
-# ============================================================
 # Optional: air region with radiation boundary
 # ============================================================
 
@@ -252,6 +213,7 @@ if ADD_AIR_REGION:
 
 # ============================================================
 # Optional: adaptive setup + sweep
+# (only useful AFTER you have manually added a port across the gap)
 # ============================================================
 
 if ADD_SOLUTION:
@@ -294,12 +256,21 @@ if ADD_SOLUTION:
 # ============================================================
 
 perim_mm = (3 * (2 * a - 2 * r)) + (2 * (a - r) - GAP_MM) + 4 * (math.pi / 2.0) * r
-c = 299792458.0
+c_mps   = 299792458.0
 freq_hz = FREQ_MHZ * 1e6
-lambdas = (perim_mm * 1e-3) / (c / freq_hz)
+lambdas = (perim_mm * 1e-3) / (c_mps / freq_hz)
+
+# Analytic L estimate (Greenhouse single-turn square loop)
+a_m = (LOOP_SIDE_MM - TRACE_WIDTH_MM) * 1e-3
+wt_m = (TRACE_WIDTH_MM + TRACE_THICK_MM) * 1e-3
+mu0 = 4e-7 * math.pi
+L_est_H = (2.0 * mu0 * a_m / math.pi) * (math.log(2.0 * a_m / wt_m) - 0.274)
+L_est_nH = L_est_H * 1e9
 
 oDesktop.AddMessage("", "", 0,
-    "SquareLoop built. perim ~ %.2f mm, %.3f lambda at %.0f MHz."
-    % (perim_mm, lambdas, FREQ_MHZ))
+    "SquareLoop built. side=%.1fmm  perim~%.1fmm (%.3f lambda @ %.0fMHz). "
+    "Analytic L ~ %.1f nH (Greenhouse). Add a port across the gap, solve, "
+    "then trim LOOP_SIDE_MM by ~1mm per ~4nH to dial in 120 nH."
+    % (LOOP_SIDE_MM, perim_mm, lambdas, FREQ_MHZ, L_est_nH))
 
 oEditor.FitAll()
