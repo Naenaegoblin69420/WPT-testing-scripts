@@ -31,14 +31,20 @@ Run ``--analytic-only`` to print these estimates without launching HFSS.
 
 Realistic k expectation
 -----------------------
-At an 11 mm separation with the implant side <= 10 mm, the analytic on-axis k
-for the default initial design is ~0.09. Reaching k ~ 0.25 in air-core form
-typically needs ONE of:
+With L1=120 nH, L2=80 nH and an 11 mm gap, k ~ 0.25 in pure air-core form is
+geometrically tight; the on-axis analytic baseline for the default geometry
+is ~0.02. To boost k the script now bakes in a back-side ferrite slab on
+the primary (toggle via FERRITE.enabled, tweak FERRITE.* params at the top).
+The image-method estimate gives roughly a ~1.9x M boost for the defaults
+(mu_r = 30, ~zero gap), so analytic k climbs to ~0.04. HFSS will give the
+real number including fringe coupling and ferrite losses.
+
+Other levers, if still short:
    (1) a larger primary diameter (relax the primary's footprint),
-   (2) a ferrite flux concentrator on the primary's back face, or
+   (2) a more aggressive ferrite (higher mu_r) -- watch the loss tangent,
    (3) a reduced gap.
-Primary diameter and turn count are exposed as top-level design variables so
-they can be swept inside HFSS Optimetrics without re-running this script.
+All coil dimensions plus all ferrite parameters are HFSS design variables so
+they can be swept inside Optimetrics without re-running this script.
 
 400 MHz parasitic notes
 -----------------------
@@ -141,6 +147,46 @@ SECONDARY = CoilParams(
     trace_s_mm=0.20,
     z_base_mm=SEPARATION_MM,
 )
+
+
+@dataclass
+class FerriteSlab:
+    """Optional ferrite flux-concentrator placed BEHIND the primary coil.
+
+    The slab acts as a magnetic mirror: flux that would otherwise leak away
+    from the secondary is returned through the primary, roughly doubling M
+    (and so k) in the ideal limit (mu_r -> inf, zero air gap). For finite
+    mu_r the image-current method gives a boost factor of
+        1 + (mu_r - 1) / (mu_r + 1)
+    Expect ~1.8 - 1.9x with the defaults below.
+
+    Tradeoff: ferrite losses at 400 MHz add to the primary's R_internal
+    (NiZn tan(delta_mu) ~ 0.05 - 0.3 at this band). Bigger mu_r pushes k
+    up but also widens the loss penalty -- watch R1 after enabling.
+
+    Defaults below are representative of an HF-rated NiZn ferrite
+    (Fair-Rite 67/68 family, Ferroxcube 4F1) near 400 MHz. Swap in your
+    datasheet values once a part is chosen.
+    """
+    enabled: bool = True
+
+    # Geometry (square slab, centred on the origin in x and y)
+    lateral_size_mm: float = 25.0   # x and y extent; >= ~2 * primary d_out
+    thickness_mm: float = 1.0       # z extent (RF skin depth in ferrite is
+                                    # metres at 400 MHz, so 1 mm is plenty)
+    air_gap_mm: float = 0.10        # gap between slab TOP and primary BOTTOM
+
+    # Material (custom material registered in the HFSS material library)
+    material_name: str = "HF_Ferrite_400MHz"
+    mu_r: float = 30.0              # relative permeability (real part)
+    magnetic_loss_tangent: float = 0.10
+    epsilon_r: float = 12.0
+    dielectric_loss_tangent: float = 0.001
+    bulk_conductivity_S_per_m: float = 0.01    # NiZn ferrite is ~ MOhm cm
+
+
+# Top-level tweakable: edit fields and re-run.
+FERRITE = FerriteSlab()
 
 
 # ============================================================================
@@ -269,6 +315,24 @@ def estimate_k(primary: CoilParams, secondary: CoilParams,
     return M_total / math.sqrt(L1 * L2)
 
 
+def ferrite_image_boost(slab: FerriteSlab) -> float:
+    """Image-current k-boost factor for a back-side ferrite slab.
+
+    The 'mirror' image of every primary-current element has strength
+    (mu_r - 1) / (mu_r + 1) (the magnetic reflection coefficient at a
+    half-infinite slab). M gets contributions from both the real coil and
+    its image, so total M_with / M_without = 1 + (mu_r-1)/(mu_r+1).
+
+    The estimate ignores: (a) finite slab thickness, (b) finite slab
+    lateral size, (c) air-gap distance, (d) ferrite losses. HFSS will
+    capture all of these -- this number is only for setting expectations.
+    """
+    if not slab.enabled or slab.mu_r <= 1.0:
+        return 1.0
+    image_strength = (slab.mu_r - 1.0) / (slab.mu_r + 1.0)
+    return 1.0 + image_strength
+
+
 def print_analytic_estimates() -> None:
     print("-" * 72)
     print("Analytic pre-build estimates (Wheeler L, surface-R, on-axis M)")
@@ -288,9 +352,17 @@ def print_analytic_estimates() -> None:
               f"R ~ {est['R_ohm_analytic']:5.2f} Ohm  (target {target_R:.2f})")
         print(f"             centre-line wire length ~ {est['wire_length_mm']:5.1f} mm")
     k_est = estimate_k(PRIMARY, SECONDARY, SEPARATION_MM)
+    boost = ferrite_image_boost(FERRITE)
     print()
-    print(f"  on-axis coupling estimate at z={SEPARATION_MM} mm:  k ~ {k_est:.3f}")
-    print(f"      (note: HFSS will give a more accurate k incl. fringing)")
+    print(f"  on-axis coupling estimate at z={SEPARATION_MM} mm:  k ~ {k_est:.3f}  (no ferrite)")
+    if FERRITE.enabled:
+        print(f"  ferrite slab enabled (mu_r={FERRITE.mu_r}, "
+              f"tan_delta_mu={FERRITE.magnetic_loss_tangent}, "
+              f"t={FERRITE.thickness_mm} mm, gap={FERRITE.air_gap_mm} mm)")
+        print(f"     image-method boost ~ {boost:.2f}x  =>  k ~ {k_est*boost:.3f}")
+        print(f"     (HFSS will give the real number including loss / finite-slab effects)")
+    else:
+        print(f"  ferrite slab disabled  (set FERRITE.enabled = True to engage)")
     print("-" * 72)
 
 
@@ -485,6 +557,65 @@ def assign_lumped_port(hfss: Hfss, port_info: dict, port_name: str,
     )
 
 
+def add_ferrite_material(hfss: Hfss, slab: FerriteSlab) -> None:
+    """Register the ferrite material in the project's material library.
+
+    Tries a few attribute names because PyAEDT has shifted these between
+    versions (e.g. magnetic_loss_tangent vs loss_tangent_mu).
+    """
+    existing = getattr(hfss.materials, "material_keys", None) or set(hfss.materials.mat_names_aedt)
+    if slab.material_name in existing:
+        return
+
+    mat = hfss.materials.add_material(slab.material_name)
+
+    def _try_set(attr_name: str, value):
+        try:
+            setattr(mat, attr_name, value)
+            return True
+        except Exception:
+            return False
+
+    _try_set("permeability", slab.mu_r)
+    _try_set("permittivity", slab.epsilon_r)
+    _try_set("conductivity", slab.bulk_conductivity_S_per_m)
+
+    # Magnetic loss tangent: attribute name has moved around. Try them all.
+    for cand in ("magnetic_loss_tangent", "loss_tangent_mu",
+                 "magnetic_loss_tan", "mu_loss_tangent"):
+        if _try_set(cand, slab.magnetic_loss_tangent):
+            break
+    for cand in ("dielectric_loss_tangent", "loss_tangent",
+                 "dielectric_loss_tan"):
+        if _try_set(cand, slab.dielectric_loss_tangent):
+            break
+
+
+def build_ferrite_slab(hfss: Hfss, slab: FerriteSlab, primary: CoilParams) -> str:
+    """Place a ferrite slab BEHIND the primary coil (in -z half-space).
+
+    Slab is centred on (0, 0) in x-y and sits below the primary's z_base by
+    `air_gap_mm`. Returns the new object's name.
+    """
+    add_ferrite_material(hfss, slab)
+    # Register slab geometry as design vars too (for Optimetrics)
+    hfss["$ferrite_size"] = f"{slab.lateral_size_mm}mm"
+    hfss["$ferrite_thick"] = f"{slab.thickness_mm}mm"
+    hfss["$ferrite_gap"] = f"{slab.air_gap_mm}mm"
+
+    z_top = primary.z_base_mm - slab.air_gap_mm
+    z_bottom = z_top - slab.thickness_mm
+    half = slab.lateral_size_mm / 2.0
+    name = "Primary_FerriteSlab"
+    hfss.modeler.create_box(
+        origin=[-half, -half, z_bottom],
+        sizes=[slab.lateral_size_mm, slab.lateral_size_mm, slab.thickness_mm],
+        name=name,
+        material=slab.material_name,
+    )
+    return name
+
+
 def add_open_region(hfss: Hfss) -> None:
     """Wrap the assembly in an air box with a radiation boundary."""
     hfss.create_open_region(
@@ -581,12 +712,21 @@ def build_model(hfss: Hfss) -> dict:
     hfss.modeler.model_units = "mm"
     primary_info = build_one_coil(hfss, PRIMARY,   prefix="pri")
     secondary_info = build_one_coil(hfss, SECONDARY, prefix="sec")
+
+    slab_name = None
+    if FERRITE.enabled:
+        slab_name = build_ferrite_slab(hfss, FERRITE, PRIMARY)
+
     assign_lumped_port(hfss, primary_info,   "Primary")
     assign_lumped_port(hfss, secondary_info, "Secondary")
     add_open_region(hfss)
     setup_analysis(hfss)
     create_output_variables_and_reports(hfss)
-    return {"primary": primary_info, "secondary": secondary_info}
+    return {
+        "primary": primary_info,
+        "secondary": secondary_info,
+        "ferrite_slab": slab_name,
+    }
 
 
 def main(argv=None) -> int:
@@ -630,8 +770,11 @@ def main(argv=None) -> int:
         names = build_model(hfss)
         hfss.save_project()
         print(f"[HFSS] Model built and saved to: {project_path}")
-        for side, info in names.items():
+        for side in ("primary", "secondary"):
+            info = names[side]
             print(f"  {side:10s}  port sheet = {info['port_sheet']}")
+        if names.get("ferrite_slab"):
+            print(f"  ferrite     slab box   = {names['ferrite_slab']}")
 
         if args.solve:
             print("[HFSS] Running adaptive solve + sweep ...")

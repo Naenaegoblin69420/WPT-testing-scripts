@@ -90,27 +90,52 @@ or similar if you have a different release installed.
 | L too low       | grow `d_out` or add a turn |
 | R too high      | widen the trace `w` (R ∝ 1/w at fixed length) |
 | R too low       | narrow `w`, or shrink Cu thickness `t` (skin already dominates at 400 MHz so `t` past ~10·δ ≈ 35 µm has little effect) |
-| k too low       | enlarge the primary (its diameter sets flux capture at 11 mm gap), or add a back-side ferrite to the primary |
+| k too low       | enable `FERRITE` (see below), or enlarge the primary's `d_out` |
+| k boost adds too much R₁ | drop ferrite `mu_r` or `magnetic_loss_tangent`, or add air gap |
 | Im(Z₁₁) < 0 at 400 MHz | you are above self-resonance — increase `s` to drop parasitic C between turns |
 
-The k = 0.25 target is the optimistic stretch goal and, with the L₁=120 nH /
-L₂=80 nH constraints, geometrically very hard at an 11 mm gap. The on-axis
-elliptic-integral estimate the script prints for the default geometry is
-~0.02, and even sweeping the primary outer dimension up to ~40–50 mm (with a
-single turn, to stay at L₁=120 nH) tops out around k ≈ 0.08 by the same
-analytic. HFSS will produce a higher number than the on-axis estimate because
-fringe field captured by the secondary's loop area adds to M, but reaching
-0.25 in air-core form is unlikely without one of:
+## Ferrite back-concentrator
 
-- relaxing L₁ (a smaller L₁ allows a larger primary at higher k for the same
-  Mω product),
-- a ferrite flux concentrator on the back face of the primary (k can multiply
-  ~2–3×), or
-- a smaller gap (k goes roughly as 1 / (R² + z²)^{3/2} on-axis).
+The script places a parameterised square ferrite slab on the back of the primary
+(opposite the secondary). It acts as a magnetic mirror — flux that would otherwise
+leak away from the secondary is reflected back through the primary plane.
+Top-of-file params (`FERRITE = FerriteSlab(...)`):
 
-If 0.25 turns out to be infeasible, the figure-of-merit `k · √(Q₁ · Q₂)`
-matters more than k alone for link efficiency — keep Q up by widening traces
-(R drops) once L is on target.
+| Param | Default | What it controls |
+| ----- | ------- | ---------------- |
+| `enabled` | `True` | turn the slab on/off without deleting anything |
+| `lateral_size_mm` | `25.0` | square slab side; ~2 × primary `d_out` is a good starting point |
+| `thickness_mm` | `1.0` | z extent; at 400 MHz ferrite skin depth is metres, so 1 mm is plenty |
+| `air_gap_mm` | `0.10` | gap between slab top and primary bottom (smaller → tighter coupling) |
+| `mu_r` | `30.0` | relative permeability (real part) at 400 MHz |
+| `magnetic_loss_tangent` | `0.10` | tan δ_μ — the dominant loss term, contributes to R₁ |
+| `epsilon_r` | `12.0` | dielectric constant of the ferrite |
+| `dielectric_loss_tangent` | `0.001` | usually small for ferrites |
+| `bulk_conductivity_S_per_m` | `0.01` | NiZn ferrites are essentially insulators |
+
+**Boost rule of thumb (image-current method):**
+`M_with / M_without ≈ 1 + (μ_r − 1) / (μ_r + 1)`. For μ_r = 30 this is ~1.94×; for
+μ_r = 10, ~1.82×. The `--analytic-only` mode prints both numbers so you can compare.
+
+**Loss tradeoff:** the ferrite's tan δ_μ adds to R₁_internal (because the primary's
+flux now passes through a lossy medium on its return path). At 400 MHz typical NiZn
+ferrites sit at tan δ_μ ≈ 0.05–0.3. If HFSS reports R₁ much higher than the 2.85 Ω
+target after you enable the slab, the levers are: (a) widen the primary trace `w`
+(takes R₁ back down before the ferrite adds it back), (b) drop `mu_r`, or
+(c) open up `air_gap_mm` to reduce coupling to the lossy material.
+
+**Picking a real part:** Fair-Rite 67/68, Ferroxcube 4F1, TDK HF70 — all NiZn
+families intended for ~100 MHz – 1 GHz. Once you choose, replace the four material
+constants above with that part's 400 MHz datasheet values.
+
+**Realistic k expectation:** with the default geometry the analytic chain is
+0.021 (no ferrite) → ~0.041 (with ferrite). HFSS typically lands ~1.5–2× higher
+than the on-axis baseline because it captures fringe flux through the secondary's
+finite loop area, so a HFSS-reported k of 0.08–0.12 with ferrite is plausible.
+Reaching 0.25 still needs additional levers (larger primary, smaller gap, or a
+shaped ferrite cup rather than a flat slab). If 0.25 turns out to be infeasible,
+the figure-of-merit `k · √(Q₁ · Q₂)` matters more than k alone for link
+efficiency — keep Q up by widening traces (R drops) once L is on target.
 
 ## Frequency-domain caveats
 
