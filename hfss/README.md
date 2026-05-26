@@ -1,20 +1,32 @@
 # HFSS scripts — WPT coil design
 
-PyAEDT scripts that build the 3-D models for the wireless-power-transfer (WPT)
+Scripts that build the 3-D models for the wireless-power-transfer (WPT)
 coil pair in Ansys HFSS. Stage-2 follow-up to the Keysight ADS circuit
 simulations.
 
 ## Files
 
-| File                          | What it does                                                                 |
-| ----------------------------- | ---------------------------------------------------------------------------- |
-| `design_400MHz_coils.py`      | Builds primary + secondary square planar spirals, ports, boundary, reports. |
-| `single_square_loop.py`       | Builds ONE square loop with rounded corners and a 1 mm gap (parameterised). |
+| File                          | Runtime                | What it does                                                                 |
+| ----------------------------- | ---------------------- | ---------------------------------------------------------------------------- |
+| `design_400MHz_coils.py`      | PyAEDT (external Python) | Builds primary + secondary square planar spirals, ports, boundary, reports. |
+| `single_square_loop.py`       | IronPython (in HFSS)     | Builds ONE square loop with rounded corners and a 1 mm gap (parameterised). |
 
 ## Quick start
 
+### `single_square_loop.py` — runs *inside* HFSS
+
+1. Open / create an HFSS DrivenModal design.
+2. **Automation → Run Script**, pick `single_square_loop.py`.
+3. Edit the parameter block at the top of the file (LOOP_SIDE_MM,
+   TRACE_WIDTH_MM, TRACE_THICK_MM, CORNER_RADIUS_MM, GAP_MM, …) and re-run
+   from the same menu.
+
+No pip install required — HFSS's bundled IronPython 2.7 + COM API.
+
+### `design_400MHz_coils.py` — runs *outside* HFSS via PyAEDT
+
 ```powershell
-# 1. install PyAEDT (uses the bundled CPython that ships with AEDT, or system Python)
+# 1. install PyAEDT (system Python, or the CPython bundled with AEDT)
 py -m pip install -U ansys-aedt-core
 
 # 2. (optional) print analytic L / R / k estimates without launching HFSS
@@ -29,6 +41,13 @@ py design_400MHz_coils.py --solve
 
 The default AEDT version is `2025.2` (Student v252). Pass `--version 2024.2`
 or similar if you have a different release installed.
+
+> **NOTE — two runtimes:** PyAEDT scripts use modern CPython 3.x syntax
+> (f-strings, dataclasses, type hints) and *cannot* be run via HFSS's
+> Automation → Run Script (which is IronPython 2.7). IronPython scripts use
+> 2.7-compatible syntax and HFSS COM (`oEditor.CreatePolyline(...)`) so
+> they only run from Automation → Run Script and can't be run from an
+> external terminal. Pick whichever matches your workflow.
 
 ## Design targets (400 MHz)
 
