@@ -4,10 +4,12 @@
 # corners (3-point arcs at each turn) and a configurable open gap on the
 # right side so the loop is not electrically closed.
 #
-# This script builds GEOMETRY ONLY -- it does NOT create a port or a port
-# sheet. Add your lumped port manually across the 1 mm gap after the
-# script finishes (or set ADD_SOLUTION = True only AFTER you have added a
-# port; otherwise the adaptive solve has nothing to drive and will error).
+# This script does NOT create a port or port sheet -- add your lumped
+# port manually across the 1 mm gap after the script finishes.
+# The script DOES create (by default): the loop polyline, an air region
+# with a radiation boundary, an adaptive solution setup at 400 MHz, and
+# a 50-800 MHz interpolating sweep. Creating the setup before the port
+# exists is harmless -- only the actual analyse step needs an excitation.
 #
 # Usage:
 #   1. Open / create an HFSS DrivenModal design.
@@ -54,9 +56,9 @@ GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 0.0     # z plane the loop sits in
 
 ADD_AIR_REGION = True      # air region + radiation boundary
-ADD_SOLUTION   = False     # 400 MHz adaptive + 50-800 MHz sweep
-                           # leave False until you have manually added a
-                           # port; otherwise the solve has no excitation
+ADD_SOLUTION   = True      # 400 MHz adaptive + 50-800 MHz sweep
+                           # safe to create before the port exists --
+                           # only the actual solve needs an excitation.
 FREQ_MHZ       = 400.0     # design + radiation-boundary frequency
 PAD_MM         = 30        # air-region padding around the loop, each face
 
