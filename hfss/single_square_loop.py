@@ -4,12 +4,9 @@
 # corners (3-point arcs at each turn) and a configurable open gap on the
 # right side so the loop is not electrically closed.
 #
-# This script does NOT create a port or port sheet -- add your lumped
-# port manually across the 1 mm gap after the script finishes.
-# The script DOES create (by default): the loop polyline, an air region
-# with a radiation boundary, an adaptive solution setup at 400 MHz, and
-# a 50-800 MHz interpolating sweep. Creating the setup before the port
-# exists is harmless -- only the actual analyse step needs an excitation.
+# Geometry ONLY -- this script does not create a port, an air region, a
+# radiation boundary, or any analysis setup. Add all of those yourself
+# in HFSS after the script finishes.
 #
 # Usage:
 #   1. Open / create an HFSS DrivenModal design.
@@ -29,9 +26,9 @@
 # Greenhouse for single rectangular loops.
 #
 # The default below is LOOP_SIDE_MM = 35.0, expected to land in the
-# 115 - 130 nH window in HFSS. After you build, add a port, solve, and
-# read L = Im(Z11) / (2*pi*Freq) at 400 MHz, scale LOOP_SIDE_MM by
-# roughly +/- 1 mm per +/- 4 nH and re-run until you hit 120 nH.
+# 115 - 130 nH window in HFSS. After you set up the simulation, solve
+# and read L = Im(Z11) / (2*pi*Freq) at 400 MHz, then scale LOOP_SIDE_MM
+# by roughly +/- 1 mm per +/- 4 nH and re-run until you hit 120 nH.
 
 import ScriptEnv
 import math
@@ -54,13 +51,6 @@ TRACE_THICK_MM   = 0.035   # copper thickness (35 um = 1 oz Cu)
 CORNER_RADIUS_MM = 3.0     # inside fillet radius (must be > W/2)
 GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 0.0     # z plane the loop sits in
-
-ADD_AIR_REGION = True      # air region + radiation boundary
-ADD_SOLUTION   = True      # 400 MHz adaptive + 50-800 MHz sweep
-                           # safe to create before the port exists --
-                           # only the actual solve needs an excitation.
-FREQ_MHZ       = 400.0     # design + radiation-boundary frequency
-PAD_MM         = 30        # air-region padding around the loop, each face
 
 MATERIAL  = "copper"
 LOOP_NAME = "SquareLoop"
@@ -170,99 +160,9 @@ oEditor.CreatePolyline(polyline_params, attributes)
 
 
 # ============================================================
-# Optional: air region with radiation boundary
+# Summary into the Message Manager (analytic L estimate, Greenhouse)
 # ============================================================
 
-if ADD_AIR_REGION:
-    pad_str = "%fmm" % PAD_MM
-    oEditor.CreateRegion(
-        [
-            "NAME:RegionParameters",
-            "+XPaddingType:=", "Absolute Offset",
-            "+XPadding:=",     pad_str,
-            "-XPaddingType:=", "Absolute Offset",
-            "-XPadding:=",     pad_str,
-            "+YPaddingType:=", "Absolute Offset",
-            "+YPadding:=",     pad_str,
-            "-YPaddingType:=", "Absolute Offset",
-            "-YPadding:=",     pad_str,
-            "+ZPaddingType:=", "Absolute Offset",
-            "+ZPadding:=",     pad_str,
-            "-ZPaddingType:=", "Absolute Offset",
-            "-ZPadding:=",     pad_str,
-        ],
-        [
-            "NAME:Attributes",
-            "Name:=",                 "Region",
-            "Flags:=",                "Wireframe#",
-            "Color:=",                "(143 175 143)",
-            "Transparency:=",         1,
-            "PartCoordinateSystem:=", "Global",
-            "MaterialValue:=",        '"vacuum"',
-            "SolveInside:=",          True,
-        ],
-    )
-
-    oBoundary = oDesign.GetModule("BoundarySetup")
-    region_faces = oEditor.GetFaceIDs("Region")
-    oBoundary.AssignRadiation([
-        "NAME:Rad1",
-        "Faces:=",          region_faces,
-        "IsFssReference:=", False,
-        "IsForPML:=",       False,
-    ])
-
-
-# ============================================================
-# Optional: adaptive setup + sweep
-# (only useful AFTER you have manually added a port across the gap)
-# ============================================================
-
-if ADD_SOLUTION:
-    oAnalysis = oDesign.GetModule("AnalysisSetup")
-    oAnalysis.InsertSetup("HfssDriven", [
-        "NAME:Setup",
-        "Frequency:=",              "%fMHz" % FREQ_MHZ,
-        "MaxDeltaS:=",              0.01,
-        "MaximumPasses:=",          20,
-        "MinimumPasses:=",          2,
-        "MinimumConvergedPasses:=", 2,
-        "PercentRefinement:=",      30,
-        "IsEnabled:=",              True,
-        "BasisOrder:=",             1,
-        "DoLambdaRefine:=",         True,
-        "DoMaterialLambda:=",       True,
-        "SetLambdaTarget:=",        False,
-        "Target:=",                 0.3333,
-        "UseMaxTetIncrease:=",      False,
-    ])
-    oAnalysis.InsertFrequencySweep("Setup", [
-        "NAME:Sweep_50_to_800",
-        "IsEnabled:=",          True,
-        "RangeType:=",          "LinearCount",
-        "RangeStart:=",         "50MHz",
-        "RangeEnd:=",           "800MHz",
-        "RangeCount:=",         151,
-        "Type:=",               "Interpolating",
-        "SaveFields:=",         False,
-        "SaveRadFields:=",      False,
-        "InterpTolerance:=",    0.5,
-        "InterpMaxSolns:=",     250,
-        "InterpMinSolns:=",     0,
-        "InterpMinSubranges:=", 1,
-    ])
-
-
-# ============================================================
-# Summary into the Message Manager
-# ============================================================
-
-perim_mm = (3 * (2 * a - 2 * r)) + (2 * (a - r) - GAP_MM) + 4 * (math.pi / 2.0) * r
-c_mps   = 299792458.0
-freq_hz = FREQ_MHZ * 1e6
-lambdas = (perim_mm * 1e-3) / (c_mps / freq_hz)
-
-# Analytic L estimate (Greenhouse single-turn square loop)
 a_m = (LOOP_SIDE_MM - TRACE_WIDTH_MM) * 1e-3
 wt_m = (TRACE_WIDTH_MM + TRACE_THICK_MM) * 1e-3
 mu0 = 4e-7 * math.pi
@@ -270,9 +170,9 @@ L_est_H = (2.0 * mu0 * a_m / math.pi) * (math.log(2.0 * a_m / wt_m) - 0.274)
 L_est_nH = L_est_H * 1e9
 
 oDesktop.AddMessage("", "", 0,
-    "SquareLoop built. side=%.1fmm  perim~%.1fmm (%.3f lambda @ %.0fMHz). "
-    "Analytic L ~ %.1f nH (Greenhouse). Add a port across the gap, solve, "
-    "then trim LOOP_SIDE_MM by ~1mm per ~4nH to dial in 120 nH."
-    % (LOOP_SIDE_MM, perim_mm, lambdas, FREQ_MHZ, L_est_nH))
+    "SquareLoop built. side=%.1fmm. Greenhouse analytic L ~ %.1f nH. "
+    "Add port + region + setup manually, solve, then trim LOOP_SIDE_MM "
+    "by ~1mm per ~4nH to dial in 120 nH."
+    % (LOOP_SIDE_MM, L_est_nH))
 
 oEditor.FitAll()
