@@ -9,6 +9,7 @@ simulations.
 | File                          | What it does                                                                 |
 | ----------------------------- | ---------------------------------------------------------------------------- |
 | `design_400MHz_coils.py`      | Builds primary + secondary square planar spirals, ports, boundary, reports. |
+| `single_square_loop.py`       | Builds ONE square loop with rounded corners and a 1 mm gap (parameterised). |
 
 ## Quick start
 
