@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.python-version
+
+# Ansys AEDT artefacts
+*.aedt.lock
+*.aedtresults/
+*.aedt.auto
+*.aedb/
+*.lock
+*.aedtz
+hfss_projects/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
