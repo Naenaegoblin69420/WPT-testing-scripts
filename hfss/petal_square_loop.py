@@ -375,79 +375,89 @@ oEditor.CreatePolyline(polyline_params, attributes)
 
 
 # ============================================================
-# Port "TX" -- lumped circuit port across the gap
+# Port "TX" -- circuit port between two edges at the gap
 # ============================================================
-# Drops a 2-D rectangular sheet bridging the gap, then assigns a lumped
-# port named "TX" to it (50 ohm, renormalised, integration line spans
-# the gap in +y direction). The sheet sits at z = LOOP_Z_MM (the trace
-# centre-line plane), with width = TRACE_WIDTH_MM in x and height =
-# GAP_MM in y, centred on the same x as the trace ends at the gap --
-# i.e. it follows the petal-induced x-shift automatically.
+# Picks one edge of the trace on each side of the gap and assigns a
+# 50-ohm circuit port named "TX" between them via AssignCircuitPort.
+# No port sheet is created -- HFSS computes V/I directly from the two
+# edges. The edges are selected by closest-distance search to a target
+# point on the trace's top surface at each end face, so the lookup
+# follows the petal-induced x-shift automatically (the edges that get
+# picked are the "top" edges of the two end faces, parallel, on either
+# side of the gap).
 
-PORT_NAME       = "TX"
-PORT_SHEET_NAME = "TX_Sheet"
-PORT_IMPEDANCE  = 50.0   # ohm
+PORT_NAME      = "TX"
+PORT_IMPEDANCE = 50.0   # ohm
 
-# Where the two trace ends meet the gap. For the symmetric (default)
-# layout these two x's are equal; if you ever set up an asymmetric
-# straddling petal they could differ slightly, in which case we centre
-# the port sheet between them.
-gap_top_x = gap_top_xyz[0]
-gap_bot_x = gap_bot_xyz[0]
-sheet_x_center = 0.5 * (gap_top_x + gap_bot_x)
 
-oEditor.CreateRectangle(
-    [
-        "NAME:RectangleParameters",
-        "IsCovered:=", True,
-        "XStart:=",    "%fmm" % (sheet_x_center - TRACE_WIDTH_MM / 2.0),
-        "YStart:=",    "%fmm" % -half_gap,
-        "ZStart:=",    "%fmm" % LOOP_Z_MM,
-        "Width:=",     "%fmm" % TRACE_WIDTH_MM,
-        "Height:=",    "%fmm" % GAP_MM,
-        "WhichAxis:=", "Z",
-    ],
-    [
-        "NAME:Attributes",
-        "Name:=",                 PORT_SHEET_NAME,
-        "Flags:=",                "",
-        "Color:=",                "(255 0 0)",
-        "Transparency:=",         0.5,
-        "PartCoordinateSystem:=", "Global",
-        "MaterialValue:=",        '"vacuum"',
-        "SolveInside:=",          True,
-    ],
-)
+def _to_mm(value):
+    """Strip an 'mm' (or 'm') suffix and return the number as a float."""
+    s = str(value).strip()
+    if s.endswith("mm"):
+        return float(s[:-2])
+    if s.endswith("m"):
+        return float(s[:-1]) * 1000.0
+    return float(s)
+
+
+def _edge_midpoint(eid):
+    """Return (x, y, z) in mm at the average of the edge's vertex positions."""
+    vids = oEditor.GetVertexIDsFromEdge(eid)
+    if not vids:
+        return None
+    n = len(vids)
+    sx = sy = sz = 0.0
+    for vid in vids:
+        pos = oEditor.GetVertexPosition(vid)
+        sx += _to_mm(pos[0])
+        sy += _to_mm(pos[1])
+        sz += _to_mm(pos[2])
+    return (sx / n, sy / n, sz / n)
+
+
+def _find_closest_edge(body_name, tx, ty, tz):
+    """Edge ID of body_name whose vertex-midpoint is closest to (tx, ty, tz)."""
+    eids = oEditor.GetEdgeIDsFromObject(body_name)
+    best_eid = None
+    best_d2 = 1.0e30
+    for eid in eids:
+        mid = _edge_midpoint(eid)
+        if mid is None:
+            continue
+        dx = mid[0] - tx
+        dy = mid[1] - ty
+        dz = mid[2] - tz
+        d2 = dx * dx + dy * dy + dz * dz
+        if d2 < best_d2:
+            best_d2 = d2
+            best_eid = eid
+    return best_eid
+
+
+# Aim at the top-of-trace edge of each end face: midpoint sits at
+# (gap end x, +/- half_gap, z + T/2). The closest-edge search snaps to
+# whichever end-face edge is nearest, which is fine for a port -- the
+# user said "any of them on each side of the gap".
+trace_top_z = LOOP_Z_MM + TRACE_THICK_MM / 2.0
+edge_top = _find_closest_edge(LOOP_NAME,
+                              gap_top_xyz[0], gap_top_xyz[1], trace_top_z)
+edge_bot = _find_closest_edge(LOOP_NAME,
+                              gap_bot_xyz[0], gap_bot_xyz[1], trace_top_z)
+
+if edge_top is None or edge_bot is None:
+    raise Exception("Could not locate trace-end edges at the gap.")
+if edge_top == edge_bot:
+    raise Exception(
+        "Same edge picked for both ends of the gap -- the trace's two end "
+        "faces may not have produced distinct edges. Check the polyline.")
 
 oBoundary = oDesign.GetModule("BoundarySetup")
-oBoundary.AssignLumpedPort([
+oBoundary.AssignCircuitPort([
     "NAME:" + PORT_NAME,
-    "Objects:=",                 [PORT_SHEET_NAME],
-    "RenormalizeAllTerminals:=", True,
+    "Edges:=",                   [int(edge_top), int(edge_bot)],
+    "Impedance:=",               "%fohm" % PORT_IMPEDANCE,
     "DoDeembed:=",               False,
-    [
-        "NAME:Modes",
-        [
-            "NAME:Mode1",
-            "ModeNum:=",      1,
-            "UseIntLine:=",   True,
-            [
-                "NAME:IntLine",
-                "Start:=", ["%fmm" % sheet_x_center,
-                            "%fmm" % -half_gap,
-                            "%fmm" % LOOP_Z_MM],
-                "End:=",   ["%fmm" % sheet_x_center,
-                            "%fmm" %  half_gap,
-                            "%fmm" % LOOP_Z_MM],
-            ],
-            "CharImp:=",        "Zpi",
-            "AlignmentGroup:=", 0,
-            "RenormImp:=",      "%fohm" % PORT_IMPEDANCE,
-        ],
-    ],
-    "ShowReporterFilter:=", False,
-    "ReporterFilter:=",     [True],
-    "Impedance:=",          "%fohm" % PORT_IMPEDANCE,
+    "RenormalizeAllTerminals:=", True,
 ])
 
 
@@ -480,13 +490,13 @@ oDesktop.AddMessage("", "", 0,
     "PetalSquareLoop built. side=%.1fmm  z=%.1fmm  %d petals  "
     "height=%+.2fmm  chord=%.2fmm. "
     "Baseline area %.1f mm^2 %+.1f mm^2 from petals = %.1f mm^2 (%+.1f%%). "
-    "Lumped port 'TX' added at x=%.3f, y=+/-%.2f, z=%.2f (50 ohm). "
+    "Circuit port 'TX' added across the gap at y=+/-%.2f, z=%.2f (50 ohm). "
     "Greenhouse flat-loop L estimate ~ %.1f nH (HFSS to confirm; petals "
     "will shift it)."
     % (LOOP_SIDE_MM, LOOP_Z_MM, total_petals, FOLD_HEIGHT_MM, FOLD_LENGTH_MM,
        baseline_area_mm2, petal_area_total_mm2, loop_area_mm2,
        100.0 * petal_area_total_mm2 / baseline_area_mm2 if baseline_area_mm2 > 0 else 0.0,
-       a + gap_x_offset, half_gap, LOOP_Z_MM,
+       half_gap, LOOP_Z_MM,
        L_flat_nH))
 
 oEditor.FitAll()
