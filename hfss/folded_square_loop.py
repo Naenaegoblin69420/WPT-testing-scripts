@@ -104,23 +104,32 @@ if FOLDS_PER_SIDE < 0:
     raise Exception("FOLDS_PER_SIDE must be >= 0.")
 if FOLD_HEIGHT_MM < 0 or FOLD_LENGTH_MM <= 0:
     raise Exception("FOLD_HEIGHT_MM must be >= 0, FOLD_LENGTH_MM must be > 0.")
-# When TRACE_WIDTH approaches or exceeds the fold's vertical-lift length
-# (FOLD_HEIGHT) or horizontal-run length (FOLD_LENGTH), the 90 deg z-corners
-# of the fold self-intersect via the polyline miter (XSectionBendType =
-# "Corner"). Result: TAU mesh repair fails, hf3d refuses to start. Empirical
-# safe margin is ~2x; either grow the folds or use XSectionBendType =
-# "Curved" further down in the script if you need this to build anyway.
-if FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0 and (
-        TRACE_WIDTH_MM > FOLD_HEIGHT_MM or TRACE_WIDTH_MM > FOLD_LENGTH_MM):
-    raise Exception(
-        "TRACE_WIDTH_MM (%.3f) is too close to the fold dimensions "
-        "(FOLD_HEIGHT_MM=%.3f, FOLD_LENGTH_MM=%.3f). The 90-deg z-corners "
-        "of each fold will self-intersect during the polyline sweep and "
-        "HFSS will fail in TAU mesh repair. Fix: grow FOLD_HEIGHT_MM and "
-        "FOLD_LENGTH_MM to >= 2 * TRACE_WIDTH_MM, OR change "
-        "XSectionBendType from 'Corner' to 'Curved' further down in this "
-        "script (gives rounded bumps instead of square ones)."
-        % (TRACE_WIDTH_MM, FOLD_HEIGHT_MM, FOLD_LENGTH_MM))
+# When TRACE_WIDTH approaches or exceeds either of the fold's segment
+# lengths (FOLD_HEIGHT for the vertical lifts, FOLD_LENGTH for the
+# elevated horizontal run), the 90 deg z-corners of the fold self-
+# intersect via the polyline miter (XSectionBendType = "Corner"). Result:
+# TAU mesh repair fails and hf3d refuses to start. Empirical safe margin
+# is ~2x. Report only the offending dimension(s) so it's clear which knob
+# to bump.
+if FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0:
+    offenders = []
+    if TRACE_WIDTH_MM > FOLD_HEIGHT_MM:
+        offenders.append(
+            "FOLD_HEIGHT_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- vertical lift "
+            "miters self-intersect; raise FOLD_HEIGHT_MM to >= %.3f"
+            % (FOLD_HEIGHT_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
+    if TRACE_WIDTH_MM > FOLD_LENGTH_MM:
+        offenders.append(
+            "FOLD_LENGTH_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- elevated-run "
+            "miters self-intersect; raise FOLD_LENGTH_MM to >= %.3f"
+            % (FOLD_LENGTH_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
+    if offenders:
+        raise Exception(
+            "Fold geometry would self-intersect during the polyline sweep:\n  - "
+            + "\n  - ".join(offenders)
+            + "\nAlternative: change XSectionBendType from 'Corner' to "
+              "'Curved' further down in this script (rounds the bumps, "
+              "tolerates wider traces).")
 
 
 def folded_straight(start_xy, end_xy, n_folds, fold_length, fold_height, z_base):
