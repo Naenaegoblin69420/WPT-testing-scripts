@@ -24,13 +24,30 @@
 #
 # Fold mechanics
 # --------------
-# On each of the four straight sides, FOLDS_PER_SIDE evenly-spaced
-# rectangular "bumps" are inserted into the polyline. Each fold is:
+# On each of the FOUR sides (top, left, bottom, and the right side --
+# the right side is treated as ONE logical side that just happens to
+# have the 1 mm gap somewhere in the middle), FOLDS_PER_SIDE evenly-
+# spaced rectangular "bumps" are inserted into the polyline. Each fold
+# is:
 #   * vertical line UP from z_base to z_base + FOLD_HEIGHT_MM
 #   * horizontal run of FOLD_LENGTH_MM along the path at the raised z
 #   * vertical line DOWN back to z_base
 # Added wire length per fold is 2 * FOLD_HEIGHT_MM. Set FOLDS_PER_SIDE
 # to 0 to disable folds (script then matches single_square_loop.py).
+#
+# Right-side gap handling
+# -----------------------
+# Fold positions on the right side use the SAME even spacing across its
+# full corner-to-corner length as the other three sides, so all four
+# sides are visually symmetric in a top-down view. The 1 mm gap (always
+# centred on y = 0) just lives wherever it falls:
+#   * if it lands between folds, the two ends of the trace sit at z_base
+#     on either side of the gap (the usual flat-gap case);
+#   * if a fold's elevated run happens to span y = 0, the gap lives
+#     inside that elevated run and the two ends of the trace sit at
+#     z_base + FOLD_HEIGHT_MM on either side of the gap.
+# Either way the right side has the same number of fold-bumps as the
+# other three sides.
 
 import ScriptEnv
 import math
@@ -56,9 +73,9 @@ GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 11.0    # base z plane the loop sits in
 
 # Fold parameters (set FOLDS_PER_SIDE = 0 to disable folds)
-FOLDS_PER_SIDE   = 3       # number of bumps along each straight side
+FOLDS_PER_SIDE   = 1       # number of bumps along each straight side
 FOLD_HEIGHT_MM   = 1.0     # z displacement of each fold above z_base
-FOLD_LENGTH_MM   = 1.5     # length of the raised "run" portion of each fold
+FOLD_LENGTH_MM   = 10     # length of the raised "run" portion of each fold
 
 MATERIAL  = "copper"
 LOOP_NAME = "FoldedSquareLoop"
@@ -137,11 +154,88 @@ def folded_straight(start_xy, end_xy, n_folds, fold_length, fold_height, z_base)
 # Each corner is a 3-point Arc (start shared with previous segment's end,
 # plus midpoint + end appended to the points list).
 
+def plan_right_side():
+    """Plan the right side as ONE logical side with FOLDS_PER_SIDE folds
+    evenly spaced across the full corner-to-corner length, with the gap
+    sitting wherever it falls.
+
+    Returns:
+        top_half:    points to append AFTER the initial gap-top point;
+                     traces from (a, +half_gap) UP to (a, a - r).
+        bottom_half: points to append AFTER the bottom-right corner arc;
+                     traces from (a, -(a - r)) UP to (a, -half_gap).
+        z_at_gap:    z level the trace sits at when crossing y = 0
+                     (z if no fold straddles, z + FOLD_HEIGHT_MM if one does).
+    """
+    L = 2 * (a - r)
+    if FOLDS_PER_SIDE == 0:
+        return [(a, a - r, z)], [(a, -half_gap, z)], z
+
+    occupied = FOLDS_PER_SIDE * FOLD_LENGTH_MM
+    if occupied >= L:
+        raise Exception(
+            "Folds too long for the right side (%.2f mm): %d x %.2f mm = "
+            "%.2f mm occupied. Reduce FOLDS_PER_SIDE or FOLD_LENGTH_MM."
+            % (L, FOLDS_PER_SIDE, FOLD_LENGTH_MM, occupied))
+    pitch_gap = (L - occupied) / (FOLDS_PER_SIDE + 1)
+    folds = []
+    for i in range(FOLDS_PER_SIDE):
+        s_start = (i + 1) * pitch_gap + i * FOLD_LENGTH_MM
+        folds.append((s_start, s_start + FOLD_LENGTH_MM))
+
+    s_gap_lo = L / 2.0 - half_gap
+    s_gap_hi = L / 2.0 + half_gap
+    mid_s    = L / 2.0
+
+    z_at_gap = z
+    for (fs, fe) in folds:
+        if fs <= mid_s <= fe:
+            z_at_gap = z + FOLD_HEIGHT_MM
+            break
+
+    def y_at(s):
+        return -(a - r) + s
+
+    top_half = []
+    bottom_half = []
+    for (fs, fe) in folds:
+        ys, ye = y_at(fs), y_at(fe)
+        if fe <= s_gap_lo:
+            # Full fold in the bottom half
+            bottom_half.append((a, ys, z))
+            bottom_half.append((a, ys, z + FOLD_HEIGHT_MM))
+            bottom_half.append((a, ye, z + FOLD_HEIGHT_MM))
+            bottom_half.append((a, ye, z))
+        elif fs >= s_gap_hi:
+            # Full fold in the top half
+            top_half.append((a, ys, z))
+            top_half.append((a, ys, z + FOLD_HEIGHT_MM))
+            top_half.append((a, ye, z + FOLD_HEIGHT_MM))
+            top_half.append((a, ye, z))
+        elif fs < s_gap_lo and fe > s_gap_hi:
+            # Straddling fold: UP in the bottom half, DOWN in the top half
+            bottom_half.append((a, ys, z))
+            bottom_half.append((a, ys, z + FOLD_HEIGHT_MM))
+            top_half.append((a, ye, z + FOLD_HEIGHT_MM))
+            top_half.append((a, ye, z))
+        # Other partial-overlap cases are silently dropped; they shouldn't
+        # happen when GAP_MM <= FOLD_LENGTH_MM (the normal case).
+
+    bottom_half.append((a, -half_gap, z_at_gap))
+    top_half.append((a, a - r, z))
+    return top_half, bottom_half, z_at_gap
+
+
+# Plan the right side first -- the initial polyline point's z depends on
+# whether a fold straddles the gap.
+right_top_pts, right_bottom_pts, z_at_gap = plan_right_side()
+
 points = []
 segment_types = []
 
-# Initial point: top of gap, right side
-points.append((a, half_gap, z))
+# Initial point: top of gap on the right side (may sit at elevated z)
+points.append((a, half_gap, z_at_gap))
+
 
 def add_folded_side(start_xy, end_xy):
     """Append a folded straight side and its Line segments."""
@@ -159,8 +253,15 @@ def add_corner_arc(mid_xy, end_xy):
     segment_types.append(("Arc", len(points) - 3, 3))
 
 
-# Right side going UP (top half), folded
-add_folded_side((a, half_gap), (a, a - r))
+def add_point_sequence(pt_list):
+    """Append a precomputed sequence of points, one Line segment each."""
+    for pt in pt_list:
+        points.append(pt)
+        segment_types.append(("Line", len(points) - 2, 2))
+
+
+# Right side TOP half (gap -> top-right corner) -- pre-planned above
+add_point_sequence(right_top_pts)
 # Top-right arc
 add_corner_arc((a - r + r2, a - r + r2), (a - r, a))
 # Top going LEFT, folded
@@ -175,8 +276,8 @@ add_corner_arc((-a + r - r2, -a + r - r2), (-a + r, -a))
 add_folded_side((-a + r, -a), (a - r, -a))
 # Bottom-right arc
 add_corner_arc((a - r + r2, -a + r - r2), (a, -a + r))
-# Right side going UP (bottom half, to bottom of gap), folded
-add_folded_side((a, -a + r), (a, -half_gap))
+# Right side BOTTOM half (BR corner -> bottom of gap) -- pre-planned above
+add_point_sequence(right_bottom_pts)
 
 
 # ============================================================
