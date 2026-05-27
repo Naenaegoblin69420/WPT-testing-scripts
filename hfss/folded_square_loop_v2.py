@@ -9,19 +9,25 @@
 #   even fold index (0, 2, 4, ...) -- "Z-fold":  rectangular bump in z,
 #                                                identical to the original
 #                                                folded_square_loop.py
-#                                                (lift to z+FOLD_HEIGHT_MM,
+#                                                (lift to z+Z_FOLD_HEIGHT_MM,
 #                                                 run for FOLD_LENGTH_MM,
 #                                                 drop back).
 #
 #   odd  fold index (1, 3, 5, ...) -- "2D-fold": rectangular bump in the
-#                                                XY plane (perpendicular
-#                                                jump out by FOLD_HEIGHT_MM,
-#                                                run along the path for
+#                                                XY plane (perpendicular jump
+#                                                out by
+#                                                INPLANE_FOLD_HEIGHT_MM, run
+#                                                along the path for
 #                                                FOLD_LENGTH_MM at the
 #                                                offset, perpendicular jump
-#                                                back). Mirror of the
-#                                                Z-fold, rotated into the
-#                                                horizontal plane.
+#                                                back). Mirror of the Z-fold
+#                                                rotated into the horizontal
+#                                                plane.
+#
+# The vertical height (Z_FOLD_HEIGHT_MM) and the horizontal height
+# (INPLANE_FOLD_HEIGHT_MM) are independent knobs -- they can be set to
+# different values, including zero, so for example you can run a sweep
+# with only 2D folds active (Z_FOLD_HEIGHT_MM = 0) or vice versa.
 #
 # A new parameter INPLANE_FOLD_DIRECTION (+1 = outward / -1 = inward)
 # controls which way the 2D folds bulge. It has NO effect on the
@@ -31,10 +37,10 @@
 # logical side with FOLDS_PER_SIDE folds at the same even spacing as
 # the other three. If the middle fold ends up straddling the gap:
 #   * if it's a Z-fold:  the two trace ends meet the gap at
-#                         z_base + FOLD_HEIGHT_MM (existing behaviour)
+#                         z_base + Z_FOLD_HEIGHT_MM (existing behaviour)
 #   * if it's a 2D-fold: the two trace ends meet the gap at the offset
 #                         x (displaced from the plain straight-side x
-#                         by INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM)
+#                         by INPLANE_FOLD_DIRECTION * INPLANE_FOLD_HEIGHT_MM)
 # The TX circuit port is placed across whatever the gap actually looks
 # like (z and x can both be off-base).
 #
@@ -66,12 +72,15 @@ GAP_MM           = 1.0
 LOOP_Z_MM        = 11.0
 
 # Fold parameters
-FOLDS_PER_SIDE   = 5       # total folds per side; alternates Z, 2D, Z, 2D, ...
-FOLD_HEIGHT_MM   = 1.0     # Z-fold lift OR 2D-fold petal-height magnitude
-FOLD_LENGTH_MM   = 0.3     # chord (path-direction length) of each fold
+FOLDS_PER_SIDE         = 10    # total folds per side; alternates Z, 2D, Z, 2D, ...
+FOLD_LENGTH_MM         = 0.3   # path-direction length of each fold (shared)
 
-# NEW: controls the 2D folds only
-INPLANE_FOLD_DIRECTION = 1   # +1 = outward (loop area +), -1 = inward (loop area -)
+# Heights are now INDEPENDENT for the two fold types
+Z_FOLD_HEIGHT_MM       = 1.0   # vertical lift of every even-index (Z) fold
+INPLANE_FOLD_HEIGHT_MM = 1.0   # perpendicular jump of every odd-index (2D) fold
+
+# Controls the 2D folds only -- which side of the path they bulge to
+INPLANE_FOLD_DIRECTION = 1     # +1 = outward (loop area +), -1 = inward
 
 MATERIAL  = "copper"
 LOOP_NAME = "FoldedSquareLoopV2"
@@ -101,36 +110,53 @@ if GAP_MM <= 0:
     raise Exception("GAP_MM must be positive.")
 if FOLDS_PER_SIDE < 0:
     raise Exception("FOLDS_PER_SIDE must be >= 0.")
-if FOLD_HEIGHT_MM < 0 or FOLD_LENGTH_MM <= 0:
-    raise Exception("FOLD_HEIGHT_MM must be >= 0, FOLD_LENGTH_MM must be > 0.")
+if Z_FOLD_HEIGHT_MM < 0 or INPLANE_FOLD_HEIGHT_MM < 0 or FOLD_LENGTH_MM <= 0:
+    raise Exception(
+        "Z_FOLD_HEIGHT_MM and INPLANE_FOLD_HEIGHT_MM must be >= 0, "
+        "FOLD_LENGTH_MM must be > 0.")
 if INPLANE_FOLD_DIRECTION not in (-1, 1):
     raise Exception("INPLANE_FOLD_DIRECTION must be +1 (outward) or -1 (inward).")
 
-# Z-fold miter sanity (same rule as folded_square_loop.py)
-if FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0:
+# Miter sanity: each fold type's 90 deg bumps need TRACE_WIDTH < relevant
+# height AND TRACE_WIDTH < FOLD_LENGTH, otherwise the polyline miter joins
+# self-intersect and TAU mesh repair fails. Check each fold type only if
+# any folds of that kind actually exist (Z-folds for FOLDS_PER_SIDE>=1, 2D
+# folds for FOLDS_PER_SIDE>=2).
+if FOLDS_PER_SIDE > 0:
     offenders = []
-    if TRACE_WIDTH_MM > FOLD_HEIGHT_MM:
+    n_z = (FOLDS_PER_SIDE + 1) // 2
+    n_2d = FOLDS_PER_SIDE // 2
+    if n_z > 0 and Z_FOLD_HEIGHT_MM > 0 and TRACE_WIDTH_MM > Z_FOLD_HEIGHT_MM:
         offenders.append(
-            "FOLD_HEIGHT_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- Z-fold vertical "
-            "lift miters self-intersect; raise FOLD_HEIGHT_MM to >= %.3f"
-            % (FOLD_HEIGHT_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
-    if TRACE_WIDTH_MM > FOLD_LENGTH_MM:
+            "Z_FOLD_HEIGHT_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- Z-fold vertical "
+            "lift miters self-intersect; raise Z_FOLD_HEIGHT_MM to >= %.3f"
+            % (Z_FOLD_HEIGHT_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
+    if (n_2d > 0 and INPLANE_FOLD_HEIGHT_MM > 0
+            and TRACE_WIDTH_MM > INPLANE_FOLD_HEIGHT_MM):
         offenders.append(
-            "FOLD_LENGTH_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- fold elevated-run "
+            "INPLANE_FOLD_HEIGHT_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- 2D-fold "
+            "perpendicular jump miters self-intersect; raise "
+            "INPLANE_FOLD_HEIGHT_MM to >= %.3f"
+            % (INPLANE_FOLD_HEIGHT_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
+    if ((Z_FOLD_HEIGHT_MM > 0 or INPLANE_FOLD_HEIGHT_MM > 0)
+            and TRACE_WIDTH_MM > FOLD_LENGTH_MM):
+        offenders.append(
+            "FOLD_LENGTH_MM (%.3f) < TRACE_WIDTH_MM (%.3f) -- fold offset-run "
             "miters self-intersect; raise FOLD_LENGTH_MM to >= %.3f"
             % (FOLD_LENGTH_MM, TRACE_WIDTH_MM, 2.0 * TRACE_WIDTH_MM))
     if offenders:
         raise Exception(
             "Fold geometry would self-intersect:\n  - " + "\n  - ".join(offenders))
 
-# 2D inward sanity: petal can't reach the loop centre
-if (FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0
+# 2D inward sanity: the in-plane bump can't reach the loop centre
+if (FOLDS_PER_SIDE >= 2 and INPLANE_FOLD_HEIGHT_MM > 0
         and INPLANE_FOLD_DIRECTION < 0
-        and FOLD_HEIGHT_MM >= (a - r)):
+        and INPLANE_FOLD_HEIGHT_MM >= (a - r)):
     raise Exception(
-        "|FOLD_HEIGHT_MM| (%.3f) too large for inward 2D folds: would cross the "
-        "loop centre. Keep FOLD_HEIGHT_MM < %.3f when INPLANE_FOLD_DIRECTION = -1."
-        % (FOLD_HEIGHT_MM, a - r))
+        "INPLANE_FOLD_HEIGHT_MM (%.3f) too large for inward 2D folds: would "
+        "cross the loop centre. Keep INPLANE_FOLD_HEIGHT_MM < %.3f when "
+        "INPLANE_FOLD_DIRECTION = -1."
+        % (INPLANE_FOLD_HEIGHT_MM, a - r))
 
 
 # ============================================================
@@ -146,7 +172,8 @@ def alternating_folds_straight(start_xy, end_xy):
     ex, ey = end_xy
     total = math.sqrt((ex - sx) ** 2 + (ey - sy) ** 2)
 
-    if FOLDS_PER_SIDE == 0 or FOLD_HEIGHT_MM == 0.0:
+    if FOLDS_PER_SIDE == 0 or (Z_FOLD_HEIGHT_MM == 0.0
+                                and INPLANE_FOLD_HEIGHT_MM == 0.0):
         return [(ex, ey, z)]
 
     occupied = FOLDS_PER_SIDE * FOLD_LENGTH_MM
@@ -159,7 +186,7 @@ def alternating_folds_straight(start_xy, end_xy):
     uy = (ey - sy) / total
     nx = uy            # outward perpendicular (CCW path)
     ny = -ux
-    inplane_h = INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM
+    inplane_h = INPLANE_FOLD_DIRECTION * INPLANE_FOLD_HEIGHT_MM
 
     pts = []
     cursor = 0.0
@@ -170,15 +197,15 @@ def alternating_folds_straight(start_xy, end_xy):
         fsy = sy + uy * fs
 
         if i % 2 == 0:
-            # ------- Z-fold (rectangular bump up) -------
-            pts.append((fsx, fsy, z))                          # arrive at fold start
-            pts.append((fsx, fsy, z + FOLD_HEIGHT_MM))         # lift up
+            # ------- Z-fold (rectangular bump up by Z_FOLD_HEIGHT_MM) -------
+            pts.append((fsx, fsy, z))                              # arrive at fold start
+            pts.append((fsx, fsy, z + Z_FOLD_HEIGHT_MM))           # lift up
             cursor += FOLD_LENGTH_MM
             fe = cursor
             fex = sx + ux * fe
             fey = sy + uy * fe
-            pts.append((fex, fey, z + FOLD_HEIGHT_MM))         # run across at top
-            pts.append((fex, fey, z))                          # drop back down
+            pts.append((fex, fey, z + Z_FOLD_HEIGHT_MM))           # run across at top
+            pts.append((fex, fey, z))                              # drop back down
         else:
             # ------- 2D-fold (rectangular bump in XY) -------
             # Mirror of the Z-fold: jump perpendicular OUT by inplane_h,
@@ -212,7 +239,8 @@ def plan_right_side():
     """
     L = 2 * (a - r)
 
-    if FOLDS_PER_SIDE == 0 or FOLD_HEIGHT_MM == 0.0:
+    if FOLDS_PER_SIDE == 0 or (Z_FOLD_HEIGHT_MM == 0.0
+                                and INPLANE_FOLD_HEIGHT_MM == 0.0):
         return ([(a, a - r, z)],
                 [(a, -half_gap, z)],
                 z, a)
@@ -236,11 +264,11 @@ def plan_right_side():
     # Find the straddling fold (if any) and figure out (z_at_gap, x_at_gap)
     z_at_gap = z
     x_at_gap = a
-    inplane_h = INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM
+    inplane_h = INPLANE_FOLD_DIRECTION * INPLANE_FOLD_HEIGHT_MM
     for (fs, fe, is_z) in folds:
         if fs < mid_s < fe:
             if is_z:
-                z_at_gap = z + FOLD_HEIGHT_MM
+                z_at_gap = z + Z_FOLD_HEIGHT_MM
             else:
                 # 2D-fold straddling: the offset run is at x = a + inplane_h,
                 # and the gap (at y = 0) sits inside that offset run, so the
@@ -260,8 +288,8 @@ def plan_right_side():
             # Fold entirely in bottom half
             if is_z:
                 bottom_half.append((a, ys, z))
-                bottom_half.append((a, ys, z + FOLD_HEIGHT_MM))
-                bottom_half.append((a, ye, z + FOLD_HEIGHT_MM))
+                bottom_half.append((a, ys, z + Z_FOLD_HEIGHT_MM))
+                bottom_half.append((a, ye, z + Z_FOLD_HEIGHT_MM))
                 bottom_half.append((a, ye, z))
             else:
                 # Square 2D fold: perpendicular OUT, run, perpendicular BACK
@@ -273,8 +301,8 @@ def plan_right_side():
             # Fold entirely in top half
             if is_z:
                 top_half.append((a, ys, z))
-                top_half.append((a, ys, z + FOLD_HEIGHT_MM))
-                top_half.append((a, ye, z + FOLD_HEIGHT_MM))
+                top_half.append((a, ys, z + Z_FOLD_HEIGHT_MM))
+                top_half.append((a, ye, z + Z_FOLD_HEIGHT_MM))
                 top_half.append((a, ye, z))
             else:
                 top_half.append((a, ys, z))
@@ -286,8 +314,8 @@ def plan_right_side():
             if is_z:
                 # Z-fold straddling: UP in bottom half, DOWN in top half
                 bottom_half.append((a, ys, z))
-                bottom_half.append((a, ys, z + FOLD_HEIGHT_MM))
-                top_half.append((a, ye, z + FOLD_HEIGHT_MM))
+                bottom_half.append((a, ys, z + Z_FOLD_HEIGHT_MM))
+                top_half.append((a, ye, z + Z_FOLD_HEIGHT_MM))
                 top_half.append((a, ye, z))
             else:
                 # 2D-fold straddling: bottom half arrives at fold start, jumps
@@ -493,21 +521,22 @@ L_flat_nH = L_flat_H * 1e9
 n_z_folds  = 4 * ((FOLDS_PER_SIDE + 1) // 2)   # ceil(N/2) per side, 4 sides
 n_2d_folds = 4 * (FOLDS_PER_SIDE // 2)         # floor(N/2) per side, 4 sides
 
-# Each rectangular bump (Z or 2D) adds 2 * FOLD_HEIGHT_MM of wire
-# (the two perpendicular jumps; the flat run replaces the same length
-# that would have been on the original path).
-added_z_wire_mm  = n_z_folds  * 2.0 * FOLD_HEIGHT_MM
-added_2d_wire_mm = n_2d_folds * 2.0 * FOLD_HEIGHT_MM
+# Each rectangular bump adds 2 * (its own height) of wire (the two
+# perpendicular jumps; the flat run at the offset replaces the same
+# length of path that would have been on the original straight line).
+added_z_wire_mm  = n_z_folds  * 2.0 * Z_FOLD_HEIGHT_MM
+added_2d_wire_mm = n_2d_folds * 2.0 * INPLANE_FOLD_HEIGHT_MM
 
 dir_word = "outward" if INPLANE_FOLD_DIRECTION > 0 else "inward"
 
 oDesktop.AddMessage("", "", 0,
-    "FoldedSquareLoopV2 built. side=%.1fmm  z=%.1fmm. %d Z-folds (+%.1fmm "
-    "wire) + %d 2D-folds (%s, +%.1fmm wire). Circuit port 'TX' at "
-    "(x=%.3f, y=+/-%.2f, z=%.2f, 50 ohm). Flat-loop Greenhouse L ~ %.1f nH."
+    "FoldedSquareLoopV2 built. side=%.1fmm  z=%.1fmm. %d Z-folds "
+    "(h=%.2fmm, +%.1fmm wire) + %d 2D-folds (%s, h=%.2fmm, +%.1fmm wire). "
+    "Circuit port 'TX' at (x=%.3f, y=+/-%.2f, z=%.2f, 50 ohm). "
+    "Flat-loop Greenhouse L ~ %.1f nH."
     % (LOOP_SIDE_MM, LOOP_Z_MM,
-       n_z_folds, added_z_wire_mm,
-       n_2d_folds, dir_word, added_2d_wire_mm,
+       n_z_folds,  Z_FOLD_HEIGHT_MM,       added_z_wire_mm,
+       n_2d_folds, dir_word, INPLANE_FOLD_HEIGHT_MM, added_2d_wire_mm,
        x_at_gap, half_gap, z_at_gap, L_flat_nH))
 
 oEditor.FitAll()
