@@ -2,28 +2,33 @@
 #
 # Parametric SWEEP over the petal square loop. For each combination of
 # (LOOP_SIDE_MM, TRACE_WIDTH_MM, FOLD_HEIGHT_MM):
-#   1. Delete any prior geometry / port / setup / report from the active design
+#   1. Delete the prior loop body / TX port / setup / output vars / report
+#      from the active design (does NOT touch the air region or rad bndy)
 #   2. Rebuild the petal loop with the new params (same geometry code as
 #      petal_square_loop.py)
-#   3. Create the air region + radiation boundary
-#   4. Drop the TX circuit port between the two trace-end edges
-#   5. Insert a 400 MHz adaptive setup + 5-point sweep 350-450 MHz
-#   6. Create output variables L_nH and R_ohm derived from Z(TX,TX)
-#   7. Solve
-#   8. Export a CSV with L_nH, R_ohm vs Freq; parse it; pull the 400 MHz row
-#   9. Export the L/R-vs-Freq plot as a PNG into OUTPUT_DIR
-#  10. Append a row to results.csv with the iteration's params + measured L,R
+#   3. Drop the TX circuit port between the two trace-end edges
+#   4. Insert a 400 MHz adaptive setup + 5-point sweep 350-450 MHz
+#   5. Create output variables L_nH and R_ohm derived from Z(TX,TX)
+#   6. Solve
+#   7. Export a CSV with L_nH, R_ohm vs Freq; parse it; pull the 400 MHz row
+#   8. Export the L/R-vs-Freq plot as a PNG into OUTPUT_DIR
+#   9. Append a row to results.csv with the iteration's params + measured L,R
 #      and the squared error vs the (120 nH, 2.8 ohm) target
 # After all iterations, print the iteration whose total error was smallest
 # into the Message Manager.
 #
 # IMPORTANT WORKFLOW NOTES
 # ------------------------
+# * BEFORE running, you must MANUALLY create an air region (any name)
+#   and assign a radiation boundary to it. The script will NOT touch
+#   either of them -- it only wipes/rebuilds the loop body, port, setup
+#   and reports it owns.
 # * This is script-driven, NOT HFSS Optimetrics. Each iteration re-meshes
 #   from scratch -- slow but works without making the polyline parametric
 #   in HFSS variables. Expect 2-5 min per iteration on a student licence.
-# * Open / create an HFSS DrivenModal design BEFORE running. The design
-#   will be wiped and reused -- save your work first.
+# * Open / create an HFSS DrivenModal design BEFORE running. Save your
+#   work first -- the script wipes anything named PetalSquareLoop, TX,
+#   SweepSetup, L_nH/R_ohm/ImZ, LRvsFreq, ZExport every iteration.
 # * Results land in OUTPUT_DIR (defaults to %USERPROFILE%\Desktop\PetalSweep).
 #   That folder gets: results.csv (full table), one PNG per iteration, and
 #   a temp_z.csv used internally during result parsing.
@@ -49,9 +54,9 @@ oEditor  = oDesign.SetActiveEditor("3D Modeler")
 # ============================================================
 
 # Parameters that are SWEPT
-SWEEP_LOOP_SIDE_MM   = [26.0, 28.0, 30.0, 32.0, 34.0]
-SWEEP_TRACE_WIDTH_MM = [0.08, 0.12, 0.16, 0.20]
-SWEEP_FOLD_HEIGHT_MM = [0.0, 0.5, 1.0]
+SWEEP_LOOP_SIDE_MM   = [30.0]
+SWEEP_TRACE_WIDTH_MM = [0.15]
+SWEEP_FOLD_HEIGHT_MM = [0.0, 1.0]
 
 # Parameters that are FIXED across all iterations
 TRACE_THICK_MM   = 0.035
@@ -69,7 +74,6 @@ MAX_DELTA_S      = 0.02
 SWEEP_F_LO_MHZ   = 350.0    # narrow band around 400 MHz for the plot
 SWEEP_F_HI_MHZ   = 450.0
 SWEEP_F_NPOINTS  = 5
-PAD_MM           = 30.0     # air region padding
 PORT_IMPEDANCE   = 50.0     # ohm
 
 # Targets for ranking iterations
@@ -400,32 +404,10 @@ def create_circuit_port(params, gap_top_xyz, gap_bot_xyz):
     ])
 
 
-def create_air_region():
-    pad_str = "%fmm" % PAD_MM
-    oEditor.CreateRegion(
-        [
-            "NAME:RegionParameters",
-            "+XPaddingType:=", "Absolute Offset", "+XPadding:=", pad_str,
-            "-XPaddingType:=", "Absolute Offset", "-XPadding:=", pad_str,
-            "+YPaddingType:=", "Absolute Offset", "+YPadding:=", pad_str,
-            "-YPaddingType:=", "Absolute Offset", "-YPadding:=", pad_str,
-            "+ZPaddingType:=", "Absolute Offset", "+ZPadding:=", pad_str,
-            "-ZPaddingType:=", "Absolute Offset", "-ZPadding:=", pad_str,
-        ],
-        [
-            "NAME:Attributes", "Name:=", "Region", "Flags:=", "Wireframe#",
-            "Color:=", "(143 175 143)", "Transparency:=", 1,
-            "PartCoordinateSystem:=", "Global",
-            "MaterialValue:=", '"vacuum"', "SolveInside:=", True,
-        ],
-    )
-    oBoundary = oDesign.GetModule("BoundarySetup")
-    region_faces = oEditor.GetFaceIDs("Region")
-    oBoundary.AssignRadiation([
-        "NAME:Rad1",
-        "Faces:=", region_faces,
-        "IsFssReference:=", False, "IsForPML:=", False,
-    ])
+# Note: the air region + radiation boundary are NOT created by this
+# script. You must create them manually in HFSS once before running the
+# sweep -- the script only owns the loop body, the TX port, the setup,
+# the output variables and the LRvsFreq/ZExport reports.
 
 
 def create_setup_and_sweep():
@@ -537,26 +519,24 @@ def delete_previous_model():
     except Exception:
         pass
 
-    # Boundaries (port + radiation)
+    # Boundaries (TX port only -- the user's radiation boundary is NOT touched)
     try:
         oB = oDesign.GetModule("BoundarySetup")
-        for b in [PORT_NAME, "Rad1"]:
-            try:
-                oB.DeleteBoundaries([b])
-            except Exception:
-                pass
+        try:
+            oB.DeleteBoundaries([PORT_NAME])
+        except Exception:
+            pass
     except Exception:
         pass
 
-    # Geometry
-    for obj in [LOOP_NAME, "Region"]:
-        try:
-            oEditor.Delete([
-                "NAME:Selections",
-                "Selections:=", obj,
-            ])
-        except Exception:
-            pass
+    # Geometry (loop body only -- the user's air region is NOT touched)
+    try:
+        oEditor.Delete([
+            "NAME:Selections",
+            "Selections:=", LOOP_NAME,
+        ])
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -722,7 +702,6 @@ for loop_side in SWEEP_LOOP_SIDE_MM:
             try:
                 delete_previous_model()
                 gap_top, gap_bot = build_geometry(params)
-                create_air_region()
                 create_circuit_port(params, gap_top, gap_bot)
                 create_setup_and_sweep()
                 create_output_variables()
