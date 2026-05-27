@@ -375,6 +375,83 @@ oEditor.CreatePolyline(polyline_params, attributes)
 
 
 # ============================================================
+# Port "TX" -- lumped circuit port across the gap
+# ============================================================
+# Drops a 2-D rectangular sheet bridging the gap, then assigns a lumped
+# port named "TX" to it (50 ohm, renormalised, integration line spans
+# the gap in +y direction). The sheet sits at z = LOOP_Z_MM (the trace
+# centre-line plane), with width = TRACE_WIDTH_MM in x and height =
+# GAP_MM in y, centred on the same x as the trace ends at the gap --
+# i.e. it follows the petal-induced x-shift automatically.
+
+PORT_NAME       = "TX"
+PORT_SHEET_NAME = "TX_Sheet"
+PORT_IMPEDANCE  = 50.0   # ohm
+
+# Where the two trace ends meet the gap. For the symmetric (default)
+# layout these two x's are equal; if you ever set up an asymmetric
+# straddling petal they could differ slightly, in which case we centre
+# the port sheet between them.
+gap_top_x = gap_top_xyz[0]
+gap_bot_x = gap_bot_xyz[0]
+sheet_x_center = 0.5 * (gap_top_x + gap_bot_x)
+
+oEditor.CreateRectangle(
+    [
+        "NAME:RectangleParameters",
+        "IsCovered:=", True,
+        "XStart:=",    "%fmm" % (sheet_x_center - TRACE_WIDTH_MM / 2.0),
+        "YStart:=",    "%fmm" % -half_gap,
+        "ZStart:=",    "%fmm" % LOOP_Z_MM,
+        "Width:=",     "%fmm" % TRACE_WIDTH_MM,
+        "Height:=",    "%fmm" % GAP_MM,
+        "WhichAxis:=", "Z",
+    ],
+    [
+        "NAME:Attributes",
+        "Name:=",                 PORT_SHEET_NAME,
+        "Flags:=",                "",
+        "Color:=",                "(255 0 0)",
+        "Transparency:=",         0.5,
+        "PartCoordinateSystem:=", "Global",
+        "MaterialValue:=",        '"vacuum"',
+        "SolveInside:=",          True,
+    ],
+)
+
+oBoundary = oDesign.GetModule("BoundarySetup")
+oBoundary.AssignLumpedPort([
+    "NAME:" + PORT_NAME,
+    "Objects:=",                 [PORT_SHEET_NAME],
+    "RenormalizeAllTerminals:=", True,
+    "DoDeembed:=",               False,
+    [
+        "NAME:Modes",
+        [
+            "NAME:Mode1",
+            "ModeNum:=",      1,
+            "UseIntLine:=",   True,
+            [
+                "NAME:IntLine",
+                "Start:=", ["%fmm" % sheet_x_center,
+                            "%fmm" % -half_gap,
+                            "%fmm" % LOOP_Z_MM],
+                "End:=",   ["%fmm" % sheet_x_center,
+                            "%fmm" %  half_gap,
+                            "%fmm" % LOOP_Z_MM],
+            ],
+            "CharImp:=",        "Zpi",
+            "AlignmentGroup:=", 0,
+            "RenormImp:=",      "%fohm" % PORT_IMPEDANCE,
+        ],
+    ],
+    "ShowReporterFilter:=", False,
+    "ReporterFilter:=",     [True],
+    "Impedance:=",          "%fohm" % PORT_IMPEDANCE,
+])
+
+
+# ============================================================
 # Summary to the Message Manager
 # ============================================================
 
@@ -403,7 +480,7 @@ oDesktop.AddMessage("", "", 0,
     "PetalSquareLoop built. side=%.1fmm  z=%.1fmm  %d petals  "
     "height=%+.2fmm  chord=%.2fmm. "
     "Baseline area %.1f mm^2 %+.1f mm^2 from petals = %.1f mm^2 (%+.1f%%). "
-    "Port sheet goes at x=%.3f, y=+/-%.2f, z=%.2f. "
+    "Lumped port 'TX' added at x=%.3f, y=+/-%.2f, z=%.2f (50 ohm). "
     "Greenhouse flat-loop L estimate ~ %.1f nH (HFSS to confirm; petals "
     "will shift it)."
     % (LOOP_SIDE_MM, LOOP_Z_MM, total_petals, FOLD_HEIGHT_MM, FOLD_LENGTH_MM,
