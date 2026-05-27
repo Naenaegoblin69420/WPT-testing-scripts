@@ -66,16 +66,16 @@ oEditor  = oDesign.SetActiveEditor("3D Modeler")
 
 # Loop geometry (XY footprint -- identical to single_square_loop.py)
 LOOP_SIDE_MM     = 30.0    # outer side length
-TRACE_WIDTH_MM   = 0.1     # trace width (perpendicular to path)
+TRACE_WIDTH_MM   = 0.15     # trace width (perpendicular to path)
 TRACE_THICK_MM   = 0.035   # copper thickness (35 um = 1 oz Cu)
 CORNER_RADIUS_MM = 3.0     # inside fillet radius (must be > W/2)
 GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 11.0    # base z plane the loop sits in
 
 # Fold parameters (set FOLDS_PER_SIDE = 0 to disable folds)
-FOLDS_PER_SIDE   = 1       # number of bumps along each straight side
+FOLDS_PER_SIDE   = 3       # number of bumps along each straight side
 FOLD_HEIGHT_MM   = 1.0     # z displacement of each fold above z_base
-FOLD_LENGTH_MM   = 10     # length of the raised "run" portion of each fold
+FOLD_LENGTH_MM   = 4.5     # length of the raised "run" portion of each fold
 
 MATERIAL  = "copper"
 LOOP_NAME = "FoldedSquareLoop"
@@ -104,6 +104,23 @@ if FOLDS_PER_SIDE < 0:
     raise Exception("FOLDS_PER_SIDE must be >= 0.")
 if FOLD_HEIGHT_MM < 0 or FOLD_LENGTH_MM <= 0:
     raise Exception("FOLD_HEIGHT_MM must be >= 0, FOLD_LENGTH_MM must be > 0.")
+# When TRACE_WIDTH approaches or exceeds the fold's vertical-lift length
+# (FOLD_HEIGHT) or horizontal-run length (FOLD_LENGTH), the 90 deg z-corners
+# of the fold self-intersect via the polyline miter (XSectionBendType =
+# "Corner"). Result: TAU mesh repair fails, hf3d refuses to start. Empirical
+# safe margin is ~2x; either grow the folds or use XSectionBendType =
+# "Curved" further down in the script if you need this to build anyway.
+if FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0 and (
+        TRACE_WIDTH_MM > FOLD_HEIGHT_MM or TRACE_WIDTH_MM > FOLD_LENGTH_MM):
+    raise Exception(
+        "TRACE_WIDTH_MM (%.3f) is too close to the fold dimensions "
+        "(FOLD_HEIGHT_MM=%.3f, FOLD_LENGTH_MM=%.3f). The 90-deg z-corners "
+        "of each fold will self-intersect during the polyline sweep and "
+        "HFSS will fail in TAU mesh repair. Fix: grow FOLD_HEIGHT_MM and "
+        "FOLD_LENGTH_MM to >= 2 * TRACE_WIDTH_MM, OR change "
+        "XSectionBendType from 'Corner' to 'Curved' further down in this "
+        "script (gives rounded bumps instead of square ones)."
+        % (TRACE_WIDTH_MM, FOLD_HEIGHT_MM, FOLD_LENGTH_MM))
 
 
 def folded_straight(start_xy, end_xy, n_folds, fold_length, fold_height, z_base):
