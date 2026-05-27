@@ -382,6 +382,27 @@ oEditor.CreateBox(
 
 
 # ============================================================
+# Unite all four copper bodies (spiral + bridge + via_in + via_out)
+# into one. Naming convention: the resulting solid keeps the name of
+# the FIRST selection -- so the merged body is "Rounded_Square_Spiral"
+# and all subsequent edge / port references use that single name.
+# KeepOriginals=False deletes the now-redundant individual bodies
+# from the model tree so it's clean.
+# ============================================================
+
+oEditor.Unite(
+    [
+        "NAME:Selections",
+        "Selections:=", ",".join([coil_name, bridge_name, via_in_name, via_out_name]),
+    ],
+    [
+        "NAME:UniteParameters",
+        "KeepOriginals:=", False,
+    ],
+)
+
+
+# ============================================================
 # TX circuit port between the outer-end edge and the pad edge
 # (closest-distance edge search, same pattern as petal_square_loop.py)
 # ============================================================
@@ -427,10 +448,14 @@ def _find_closest_edge(body, tx, ty, tz):
 
 
 trace_top_z = z_pos + thickness / 2.0
-# Edge on the spiral right at its outer terminal face (x = -half_side, y = +half_side)
+# After the Unite above, all copper lives in one body named coil_name.
+# We pick two distinct edges on it by closest-distance search:
+#   * one near the spiral's outer terminal face (x = -half_side, y = +half_side)
+#   * one near the +x face of what used to be the via_out box
+#     (still at x = pad_x + trace_width/2, y = pad_y), now an interior
+#     edge of the united copper body.
 edge_spiral = _find_closest_edge(coil_name, ox, oy, trace_top_z)
-# Edge on the pad's +x face (the side closest to the spiral terminal)
-edge_pad    = _find_closest_edge(via_out_name,
+edge_pad    = _find_closest_edge(coil_name,
                                  pad_x + trace_width / 2.0, pad_y, trace_top_z)
 
 if edge_spiral is None or edge_pad is None or edge_spiral == edge_pad:
