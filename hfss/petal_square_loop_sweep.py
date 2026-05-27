@@ -449,14 +449,20 @@ def create_output_variables():
     oOV = oDesign.GetModule("OutputVariable")
     solution = SETUP_NAME + " : LastAdaptive"
     omega = "(2*pi*Freq)"
+    # AssignCircuitPort creates a single terminal named PORT_NAME + "_T1".
+    # Circuit ports use the terminal-domain Zt(...) parameter, not the
+    # modal Z(...) one -- and the surrounding solution-data category has
+    # to be "Terminal Solution Data" for that to resolve.
+    term = PORT_NAME + "_T1"
     defs = [
-        ("L_nH",  "im(Z(%s,%s))/%s*1e9" % (PORT_NAME, PORT_NAME, omega)),
-        ("R_ohm", "re(Z(%s,%s))" % (PORT_NAME, PORT_NAME)),
-        ("ImZ",   "im(Z(%s,%s))" % (PORT_NAME, PORT_NAME)),
+        ("L_nH",  "1e9*im(Zt(%s,%s))/%s" % (term, term, omega)),
+        ("R_ohm", "re(Zt(%s,%s))" % (term, term)),
+        ("ImZ",   "im(Zt(%s,%s))" % (term, term)),
     ]
     for name, expr in defs:
         try:
-            oOV.CreateOutputVariable(name, expr, solution, "Modal Solution Data", [])
+            oOV.CreateOutputVariable(name, expr, solution,
+                                     "Terminal Solution Data", [])
         except Exception:
             pass  # already exists from a prior run; that's fine
 
@@ -469,7 +475,7 @@ def create_results_report():
         pass
     try:
         oR.CreateReport(
-            "LRvsFreq", "Modal Solution Data", "Rectangular Plot",
+            "LRvsFreq", "Terminal Solution Data", "Rectangular Plot",
             SETUP_NAME + " : " + FSWEEP_NAME,
             ["Domain:=", "Sweep"],
             ["Freq:=", ["All"]],
@@ -558,7 +564,7 @@ def export_z_csv(path):
         except Exception:
             pass
         oR.CreateReport(
-            "ZExport", "Modal Solution Data", "Data Table",
+            "ZExport", "Terminal Solution Data", "Data Table",
             SETUP_NAME + " : " + FSWEEP_NAME,
             ["Domain:=", "Sweep"],
             ["Freq:=", ["All"]],
