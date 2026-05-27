@@ -12,9 +12,9 @@
 # direction, increasing total wire length (and L) without enlarging the
 # loop area. Corners (the rounded arcs) stay flat at the base z.
 #
-# Geometry ONLY -- this script does not create a port, an air region, a
-# radiation boundary, or any analysis setup. Add all of those yourself
-# in HFSS after the script finishes.
+# This script creates the loop body AND a TX circuit port across the
+# gap. It does NOT create the air region or the radiation boundary --
+# add those yourself in HFSS once before running this script.
 #
 # Usage:
 #   1. Open / create an HFSS DrivenModal design.
@@ -65,20 +65,24 @@ oEditor  = oDesign.SetActiveEditor("3D Modeler")
 # ============================================================
 
 # Loop geometry (XY footprint -- identical to single_square_loop.py)
-LOOP_SIDE_MM     = 30.0    # outer side length
-TRACE_WIDTH_MM   = 0.15     # trace width (perpendicular to path)
-TRACE_THICK_MM   = 0.035   # copper thickness (35 um = 1 oz Cu)
+LOOP_SIDE_MM     = 28.0    # outer side length
+TRACE_WIDTH_MM   = 0.1     # trace width (perpendicular to path)
+TRACE_THICK_MM   = 0.05   # copper thickness (35 um = 1 oz Cu)
 CORNER_RADIUS_MM = 3.0     # inside fillet radius (must be > W/2)
 GAP_MM           = 1.0     # right-side open gap, centred on y = 0
 LOOP_Z_MM        = 11.0    # base z plane the loop sits in
 
 # Fold parameters (set FOLDS_PER_SIDE = 0 to disable folds)
-FOLDS_PER_SIDE   = 3       # number of bumps along each straight side
+FOLDS_PER_SIDE   = 5       # number of bumps along each straight side
 FOLD_HEIGHT_MM   = 1.0     # z displacement of each fold above z_base
-FOLD_LENGTH_MM   = 4.5     # length of the raised "run" portion of each fold
+FOLD_LENGTH_MM   = 1     # length of the raised "run" portion of each fold
 
 MATERIAL  = "copper"
 LOOP_NAME = "FoldedSquareLoop"
+
+# Port parameters (edge-based circuit port across the right-side gap)
+PORT_NAME      = "TX"
+PORT_IMPEDANCE = 50.0    # ohm
 
 
 # ============================================================
@@ -363,6 +367,79 @@ oEditor.CreatePolyline(polyline_params, attributes)
 
 
 # ============================================================
+# Port "TX" -- circuit port between the two edges at the gap
+# ============================================================
+# Same edge-based pattern as petal_square_loop.py: pick one edge of the
+# trace on each side of the 1 mm gap (top of the trace's cross-section
+# on each end face) and AssignCircuitPort between them. The two target
+# points use z_at_gap so the port correctly follows the elevated-z case
+# when a fold straddles the gap.
+
+def _to_mm(value):
+    s = str(value).strip()
+    if s.endswith("mm"):
+        return float(s[:-2])
+    if s.endswith("m"):
+        return float(s[:-1]) * 1000.0
+    return float(s)
+
+
+def _edge_midpoint(eid):
+    vids = oEditor.GetVertexIDsFromEdge(eid)
+    if not vids:
+        return None
+    n = float(len(vids))
+    sx = sy = sz = 0.0
+    for vid in vids:
+        pos = oEditor.GetVertexPosition(vid)
+        sx += _to_mm(pos[0])
+        sy += _to_mm(pos[1])
+        sz += _to_mm(pos[2])
+    return (sx / n, sy / n, sz / n)
+
+
+def _find_closest_edge(body, tx, ty, tz):
+    eids = oEditor.GetEdgeIDsFromObject(body)
+    best, best_d2 = None, 1.0e30
+    for eid in eids:
+        mid = _edge_midpoint(eid)
+        if mid is None:
+            continue
+        dx = mid[0] - tx
+        dy = mid[1] - ty
+        dz = mid[2] - tz
+        d2 = dx * dx + dy * dy + dz * dz
+        if d2 < best_d2:
+            best_d2 = d2
+            best = eid
+    return best
+
+
+# The two trace ends at the gap sit at (a, +/- half_gap, z_at_gap).
+# Aim at the top-of-trace edge of each end face (z_at_gap + T/2) -- any
+# end-face edge would work; this is just a deterministic pick.
+trace_top_z = z_at_gap + TRACE_THICK_MM / 2.0
+edge_top = _find_closest_edge(LOOP_NAME, a, +half_gap, trace_top_z)
+edge_bot = _find_closest_edge(LOOP_NAME, a, -half_gap, trace_top_z)
+
+if edge_top is None or edge_bot is None:
+    raise Exception("Could not locate trace-end edges at the gap.")
+if edge_top == edge_bot:
+    raise Exception(
+        "Same edge picked for both ends of the gap -- the trace's two end "
+        "faces may not have produced distinct edges. Check the polyline.")
+
+oBoundary = oDesign.GetModule("BoundarySetup")
+oBoundary.AssignCircuitPort([
+    "NAME:" + PORT_NAME,
+    "Edges:=",                   [int(edge_top), int(edge_bot)],
+    "Impedance:=",               "%fohm" % PORT_IMPEDANCE,
+    "DoDeembed:=",               False,
+    "RenormalizeAllTerminals:=", True,
+])
+
+
+# ============================================================
 # Summary into the Message Manager
 # ============================================================
 
@@ -379,8 +456,10 @@ added_wire_mm = total_folds * 2.0 * FOLD_HEIGHT_MM
 oDesktop.AddMessage("", "", 0,
     "FoldedSquareLoop built. side=%.1fmm  z=%.1fmm. "
     "%d folds total, +%.1fmm of wire vs. flat loop. "
-    "Flat-loop Greenhouse L ~ %.1f nH (folded L will be a bit higher; "
-    "HFSS to confirm)."
-    % (LOOP_SIDE_MM, LOOP_Z_MM, total_folds, added_wire_mm, L_flat_nH))
+    "Circuit port 'TX' assigned across the gap at y=+/-%.2f, z=%.2f "
+    "(50 ohm). Flat-loop Greenhouse L ~ %.1f nH (folded L will be a bit "
+    "higher; HFSS to confirm)."
+    % (LOOP_SIDE_MM, LOOP_Z_MM, total_folds, added_wire_mm,
+       half_gap, z_at_gap, L_flat_nH))
 
 oEditor.FitAll()
