@@ -13,13 +13,15 @@
 #                                                 run for FOLD_LENGTH_MM,
 #                                                 drop back).
 #
-#   odd  fold index (1, 3, 5, ...) -- "2D-fold": half-ellipse petal in the
-#                                                XY plane (chord =
-#                                                FOLD_LENGTH_MM along the
-#                                                path, height =
-#                                                FOLD_HEIGHT_MM out from
-#                                                the path), exactly like
-#                                                petal_square_loop.py.
+#   odd  fold index (1, 3, 5, ...) -- "2D-fold": rectangular bump in the
+#                                                XY plane (perpendicular
+#                                                jump out by FOLD_HEIGHT_MM,
+#                                                run along the path for
+#                                                FOLD_LENGTH_MM at the
+#                                                offset, perpendicular jump
+#                                                back). Mirror of the
+#                                                Z-fold, rotated into the
+#                                                horizontal plane.
 #
 # A new parameter INPLANE_FOLD_DIRECTION (+1 = outward / -1 = inward)
 # controls which way the 2D folds bulge. It has NO effect on the
@@ -30,11 +32,9 @@
 # the other three. If the middle fold ends up straddling the gap:
 #   * if it's a Z-fold:  the two trace ends meet the gap at
 #                         z_base + FOLD_HEIGHT_MM (existing behaviour)
-#   * if it's a 2D-fold: the two trace ends meet the gap at the
-#                         petal-curve x (displaced from the plain
-#                         straight-side x by FOLD_HEIGHT_MM *
-#                         INPLANE_FOLD_DIRECTION *
-#                         sqrt(1 - (2*half_gap/FOLD_LENGTH_MM)^2))
+#   * if it's a 2D-fold: the two trace ends meet the gap at the offset
+#                         x (displaced from the plain straight-side x
+#                         by INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM)
 # The TX circuit port is placed across whatever the gap actually looks
 # like (z and x can both be off-base).
 #
@@ -66,13 +66,12 @@ GAP_MM           = 1.0
 LOOP_Z_MM        = 11.0
 
 # Fold parameters
-FOLDS_PER_SIDE   = 4       # total folds per side; alternates Z, 2D, Z, 2D, ...
+FOLDS_PER_SIDE   = 5       # total folds per side; alternates Z, 2D, Z, 2D, ...
 FOLD_HEIGHT_MM   = 1.0     # Z-fold lift OR 2D-fold petal-height magnitude
-FOLD_LENGTH_MM   = 2.0     # chord (path-direction length) of each fold
+FOLD_LENGTH_MM   = 0.3     # chord (path-direction length) of each fold
 
 # NEW: controls the 2D folds only
 INPLANE_FOLD_DIRECTION = 1   # +1 = outward (loop area +), -1 = inward (loop area -)
-PETAL_SEGMENTS         = 16  # straight pieces approximating each 2D half-ellipse
 
 MATERIAL  = "copper"
 LOOP_NAME = "FoldedSquareLoopV2"
@@ -106,8 +105,6 @@ if FOLD_HEIGHT_MM < 0 or FOLD_LENGTH_MM <= 0:
     raise Exception("FOLD_HEIGHT_MM must be >= 0, FOLD_LENGTH_MM must be > 0.")
 if INPLANE_FOLD_DIRECTION not in (-1, 1):
     raise Exception("INPLANE_FOLD_DIRECTION must be +1 (outward) or -1 (inward).")
-if PETAL_SEGMENTS < 4:
-    raise Exception("PETAL_SEGMENTS must be >= 4.")
 
 # Z-fold miter sanity (same rule as folded_square_loop.py)
 if FOLDS_PER_SIDE > 0 and FOLD_HEIGHT_MM > 0:
@@ -183,16 +180,20 @@ def alternating_folds_straight(start_xy, end_xy):
             pts.append((fex, fey, z + FOLD_HEIGHT_MM))         # run across at top
             pts.append((fex, fey, z))                          # drop back down
         else:
-            # ------- 2D-fold (half-ellipse petal in XY) -------
-            pts.append((fsx, fsy, z))                          # pre-petal start
-            for k in range(1, PETAL_SEGMENTS + 1):
-                theta = k * math.pi / PETAL_SEGMENTS
-                s_along = fs + FOLD_LENGTH_MM * (1.0 - math.cos(theta)) / 2.0
-                v_perp  = inplane_h * math.sin(theta)
-                px = sx + ux * s_along + nx * v_perp
-                py = sy + uy * s_along + ny * v_perp
-                pts.append((px, py, z))
+            # ------- 2D-fold (rectangular bump in XY) -------
+            # Mirror of the Z-fold: jump perpendicular OUT by inplane_h,
+            # run along the path for FOLD_LENGTH_MM at the offset, jump
+            # perpendicular back. All at z (no z change).
+            pts.append((fsx, fsy, z))                          # arrive at fold start
+            pts.append((fsx + nx * inplane_h,
+                        fsy + ny * inplane_h, z))              # perpendicular out
             cursor += FOLD_LENGTH_MM
+            fe = cursor
+            fex = sx + ux * fe
+            fey = sy + uy * fe
+            pts.append((fex + nx * inplane_h,
+                        fey + ny * inplane_h, z))              # run across at offset
+            pts.append((fex, fey, z))                          # perpendicular back
     pts.append((ex, ey, z))
     return pts
 
@@ -235,31 +236,20 @@ def plan_right_side():
     # Find the straddling fold (if any) and figure out (z_at_gap, x_at_gap)
     z_at_gap = z
     x_at_gap = a
-    straddling_2d = None
+    inplane_h = INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM
     for (fs, fe, is_z) in folds:
         if fs < mid_s < fe:
             if is_z:
                 z_at_gap = z + FOLD_HEIGHT_MM
             else:
-                pc = (fs + fe) / 2.0
-                cos_theta_top = (2.0 * pc - L - 2.0 * half_gap) / FOLD_LENGTH_MM
-                cos_theta_bot = (2.0 * pc - L + 2.0 * half_gap) / FOLD_LENGTH_MM
-                if abs(cos_theta_top) >= 1.0 or abs(cos_theta_bot) >= 1.0:
-                    raise Exception(
-                        "GAP_MM (%.2f) doesn't fit inside the straddling 2D fold "
-                        "(chord %.2f mm). Lower GAP_MM or raise FOLD_LENGTH_MM."
-                        % (GAP_MM, FOLD_LENGTH_MM))
-                theta_top = math.acos(cos_theta_top)
-                theta_bot = math.acos(cos_theta_bot)
-                inplane_h = INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM
-                x_at_gap = a + inplane_h * math.sin(theta_top)
-                straddling_2d = (fs, fe, theta_bot, theta_top)
+                # 2D-fold straddling: the offset run is at x = a + inplane_h,
+                # and the gap (at y = 0) sits inside that offset run, so the
+                # two trace ends meet at (a + inplane_h, +/- half_gap, z).
+                x_at_gap = a + inplane_h
             break
 
     def y_of(s):
         return -(a - r) + s
-
-    inplane_h = INPLANE_FOLD_DIRECTION * FOLD_HEIGHT_MM
 
     bottom_half = []
     top_half = []
@@ -274,12 +264,11 @@ def plan_right_side():
                 bottom_half.append((a, ye, z + FOLD_HEIGHT_MM))
                 bottom_half.append((a, ye, z))
             else:
+                # Square 2D fold: perpendicular OUT, run, perpendicular BACK
                 bottom_half.append((a, ys, z))
-                for k in range(1, PETAL_SEGMENTS + 1):
-                    theta = k * math.pi / PETAL_SEGMENTS
-                    s_along = fs + FOLD_LENGTH_MM * (1.0 - math.cos(theta)) / 2.0
-                    bottom_half.append(
-                        (a + inplane_h * math.sin(theta), y_of(s_along), z))
+                bottom_half.append((a + inplane_h, ys, z))
+                bottom_half.append((a + inplane_h, ye, z))
+                bottom_half.append((a, ye, z))
         elif fs >= s_gap_hi:
             # Fold entirely in top half
             if is_z:
@@ -289,11 +278,9 @@ def plan_right_side():
                 top_half.append((a, ye, z))
             else:
                 top_half.append((a, ys, z))
-                for k in range(1, PETAL_SEGMENTS + 1):
-                    theta = k * math.pi / PETAL_SEGMENTS
-                    s_along = fs + FOLD_LENGTH_MM * (1.0 - math.cos(theta)) / 2.0
-                    top_half.append(
-                        (a + inplane_h * math.sin(theta), y_of(s_along), z))
+                top_half.append((a + inplane_h, ys, z))
+                top_half.append((a + inplane_h, ye, z))
+                top_half.append((a, ye, z))
         else:
             # Straddling the gap
             if is_z:
@@ -303,24 +290,14 @@ def plan_right_side():
                 top_half.append((a, ye, z + FOLD_HEIGHT_MM))
                 top_half.append((a, ye, z))
             else:
-                # 2D fold straddling: petal points with theta < theta_bot in
-                # bottom half, theta > theta_top in top half
-                _, _, theta_bot, theta_top = straddling_2d
+                # 2D-fold straddling: bottom half arrives at fold start, jumps
+                # perpendicular to the offset x, then runs to the gap.
+                # Top half resumes from the offset run, then jumps back to the
+                # path at the fold end.
                 bottom_half.append((a, ys, z))
-                for k in range(1, PETAL_SEGMENTS + 1):
-                    theta = k * math.pi / PETAL_SEGMENTS
-                    if theta >= theta_bot:
-                        break
-                    s_along = fs + FOLD_LENGTH_MM * (1.0 - math.cos(theta)) / 2.0
-                    bottom_half.append(
-                        (a + inplane_h * math.sin(theta), y_of(s_along), z))
-                for k in range(1, PETAL_SEGMENTS + 1):
-                    theta = k * math.pi / PETAL_SEGMENTS
-                    if theta <= theta_top:
-                        continue
-                    s_along = fs + FOLD_LENGTH_MM * (1.0 - math.cos(theta)) / 2.0
-                    top_half.append(
-                        (a + inplane_h * math.sin(theta), y_of(s_along), z))
+                bottom_half.append((a + inplane_h, ys, z))
+                top_half.append((a + inplane_h, ye, z))
+                top_half.append((a, ye, z))
 
     bottom_half.append((x_at_gap, -half_gap, z_at_gap))
     top_half.append((a, a - r, z))
@@ -516,14 +493,11 @@ L_flat_nH = L_flat_H * 1e9
 n_z_folds  = 4 * ((FOLDS_PER_SIDE + 1) // 2)   # ceil(N/2) per side, 4 sides
 n_2d_folds = 4 * (FOLDS_PER_SIDE // 2)         # floor(N/2) per side, 4 sides
 
-# Wire added by each fold type
+# Each rectangular bump (Z or 2D) adds 2 * FOLD_HEIGHT_MM of wire
+# (the two perpendicular jumps; the flat run replaces the same length
+# that would have been on the original path).
 added_z_wire_mm  = n_z_folds  * 2.0 * FOLD_HEIGHT_MM
-# Half-ellipse arc minus chord: Ramanujan approx for arc length
-if FOLD_HEIGHT_MM > 0:
-    arc_each = math.pi * math.sqrt(((FOLD_LENGTH_MM / 2.0) ** 2 + FOLD_HEIGHT_MM ** 2) / 2.0)
-    added_2d_wire_mm = n_2d_folds * (arc_each - FOLD_LENGTH_MM)
-else:
-    added_2d_wire_mm = 0.0
+added_2d_wire_mm = n_2d_folds * 2.0 * FOLD_HEIGHT_MM
 
 dir_word = "outward" if INPLANE_FOLD_DIRECTION > 0 else "inward"
 
