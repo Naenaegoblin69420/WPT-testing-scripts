@@ -54,9 +54,9 @@ oEditor  = oDesign.SetActiveEditor("3D Modeler")
 # ============================================================
 
 # Parameters that are SWEPT
-SWEEP_LOOP_SIDE_MM   = [30.0]
-SWEEP_TRACE_WIDTH_MM = [0.15]
-SWEEP_FOLD_HEIGHT_MM = [0.0, 1.0]
+SWEEP_LOOP_SIDE_MM   = [26.0, 28.0, 30.0, 32.0, 34.0]
+SWEEP_TRACE_WIDTH_MM = [0.08, 0.12, 0.16, 0.20]
+SWEEP_FOLD_HEIGHT_MM = [0.0, 0.5, 1.0]
 
 # Parameters that are FIXED across all iterations
 TRACE_THICK_MM   = 0.035
